@@ -1,0 +1,344 @@
+---
+title: Microsoft Teams Adapter
+description: Integrate with Microsoft Teams channels and DMs via Bot Framework
+---
+
+## Installation
+
+```bash
+npm install @chat-adapter/teams
+```
+
+## Environment Variables
+
+<Note>
+  Register your bot at [Azure Bot Service](https://portal.azure.com/#create/Microsoft.AzureBot).
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TEAMS_APP_ID` | Yes | Microsoft App ID from Azure AD |
+| `TEAMS_APP_PASSWORD` | Yes | Microsoft App Password (client secret) |
+| `TEAMS_APP_TENANT_ID` | SingleTenant only | Azure AD Tenant ID |
+
+## Configuration Options
+
+```typescript
+interface TeamsAdapterConfig {
+  /** Microsoft App ID */
+  appId: string;
+  /** Microsoft App Password */
+  appPassword: string;
+  /** Microsoft App Tenant ID (required for SingleTenant) */
+  appTenantId?: string;
+  /** App Type: 'MultiTenant' (default) or 'SingleTenant' */
+  appType?: 'MultiTenant' | 'SingleTenant';
+  /** Logger instance */
+  logger: Logger;
+  /** Override bot username (optional) */
+  userName?: string;
+}
+```
+
+## Setup
+
+<Tabs>
+  <Tab title="Multi-Tenant (Default)">
+    For apps available to any organization:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createTeamsAdapter } from '@chat-adapter/teams';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        teams: createTeamsAdapter({
+          appId: process.env.TEAMS_APP_ID!,
+          appPassword: process.env.TEAMS_APP_PASSWORD!,
+          // appType defaults to 'MultiTenant'
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+  </Tab>
+
+  <Tab title="Single-Tenant">
+    For internal apps restricted to your organization:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createTeamsAdapter } from '@chat-adapter/teams';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        teams: createTeamsAdapter({
+          appId: process.env.TEAMS_APP_ID!,
+          appPassword: process.env.TEAMS_APP_PASSWORD!,
+          appTenantId: process.env.TEAMS_APP_TENANT_ID!,
+          appType: 'SingleTenant',
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+
+    <Warning>
+      `SingleTenant` apps require `appTenantId` or the adapter will throw a validation error.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Webhook Handler
+
+```typescript
+app.post('/webhooks/teams', async (req, res) => {
+  const response = await teams.handleWebhook(req, {
+    waitUntil: (promise) => {/* handle async work */},
+  });
+  res.status(response.status).send(await response.text());
+});
+```
+
+## Features
+
+### Supported Events
+
+- `Message` - Regular messages in channels/chats
+- `MessageReaction` - Emoji reactions added/removed
+- `Invoke` (Adaptive Card actions) - Button clicks
+- `Action.Submit` - Form submissions from Adaptive Cards
+
+### Message Types
+
+The adapter handles:
+- **Channel messages** - Public/private channel posts
+- **1:1 chats** - Direct messages with users
+- **Group chats** - Multi-user conversations
+- **Thread replies** - Replies in message threads
+
+### Adaptive Cards
+
+Teams uses Adaptive Cards for rich UI:
+
+```typescript
+import { Card, Section, Button } from 'chat/cards';
+
+await thread.post(
+  <Card title="Approval Request">
+    <Section text="Deploy v2.0 to production?" />
+    <Button actionId="approve" style="primary">Approve</Button>
+    <Button actionId="deny" style="danger">Deny</Button>
+  </Card>
+);
+```
+
+<Note>
+  Cards are automatically converted to Adaptive Card format. Text messages support basic markdown.
+</Note>
+
+### Reactions
+
+<Warning>
+  Teams Bot Framework does not expose APIs for adding/removing reactions programmatically.
+  The adapter can receive reaction events but cannot create them.
+</Warning>
+
+### File Attachments
+
+Send files via inline data URIs:
+
+```typescript
+import { readFileSync } from 'fs';
+
+await thread.post({
+  text: 'Quarterly report',
+  files: [{
+    filename: 'report.xlsx',
+    data: readFileSync('./report.xlsx'),
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }],
+});
+```
+
+<Note>
+  Files are sent as data URIs. For large files, consider uploading to external storage and sharing links.
+</Note>
+
+## Thread IDs
+
+Teams thread IDs encode conversation ID and service URL:
+
+```
+teams:{base64(conversationId)}:{base64(serviceUrl)}:{base64(replyToId)}
+```
+
+The service URL varies by Teams cloud (commercial, GCC, GCC-High).
+
+## Opening DMs
+
+Create a 1:1 conversation with a user:
+
+```typescript
+const dmThreadId = await teams.openDM(userId);
+await chat.getThread(dmThreadId).post('Hello!');
+```
+
+<Note>
+  The user must have interacted with the bot first (via @mention) to cache their `tenantId` and `serviceUrl`.
+  Without cached values, `openDM()` will throw a validation error.
+</Note>
+
+## Message History
+
+<Warning>
+  `fetchMessages()` requires Microsoft Graph API access with one of these permissions:
+  - `ChatMessage.Read.Chat`
+  - `Chat.Read.All`
+  - `Chat.Read.WhereInstalled`
+  
+  Configure `appTenantId` to enable Graph API access.
+</Warning>
+
+Fetch message history from a thread:
+
+```typescript
+const { messages, nextCursor } = await thread.fetchMessages({
+  limit: 50,
+  direction: 'backward', // or 'forward'
+});
+```
+
+## Platform Limits
+
+- **Message length**: 28 KB (HTML content)
+- **Adaptive Card size**: 28 KB total
+- **File size**: 4 MB via inline data URI
+- **Rate limits**: [Teams throttling thresholds](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/rate-limit)
+
+## Thread Context Caching
+
+The adapter automatically caches:
+- User service URLs (for DM creation)
+- Tenant IDs (for Graph API calls)
+- Team GUID mappings (for channel message fetching)
+
+Cache entries expire after 30 days and are stored in the StateAdapter.
+
+## Code Examples
+
+<CodeGroup>
+  ```typescript Message Handler
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.includes('help')) {
+      await event.thread.post('Available commands: /deploy, /status');
+    }
+  });
+  ```
+
+  ```typescript Reaction Handler
+  chat.onReaction(async (event) => {
+    console.log(`${event.user.userName} reacted with ${event.emoji.name}`);
+  });
+  ```
+
+  ```typescript Action Handler
+  chat.onAction('approve', async (event) => {
+    await event.thread.post('Deployment approved!');
+  });
+  ```
+
+  ```typescript Adaptive Card
+  import { Card, Section, TextBlock, Button, Column, ColumnSet } from 'chat/cards';
+
+  await thread.post(
+    <Card>
+      <Section text="**New Pull Request** #123" />
+      <ColumnSet>
+        <Column>
+          <TextBlock>Author: @jane</TextBlock>
+          <TextBlock>+250 -100 lines</TextBlock>
+        </Column>
+      </ColumnSet>
+      <Button actionId="review" style="primary">Review</Button>
+    </Card>
+  );
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook returns 401 Unauthorized">
+    - Verify `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` are correct
+    - Check that the messaging endpoint in Azure matches your webhook URL
+    - Ensure the webhook URL is publicly accessible (HTTPS required)
+  </Accordion>
+
+  <Accordion title="Bot doesn't respond in channels">
+    - Install the app to the team via Teams admin center or app store
+    - @mention the bot first to establish context
+    - Enable "Receive messages in channels" in app manifest
+  </Accordion>
+
+  <Accordion title="fetchMessages() not working">
+    - Add `appTenantId` to adapter config (required for Graph API)
+    - Grant Graph API permissions in Azure AD
+    - Wait for admin consent if required by your tenant
+  </Accordion>
+
+  <Accordion title="openDM() throws validation error">
+    - User must interact with bot first (via @mention) to cache tenantId
+    - For `SingleTenant` apps, provide `appTenantId` in config
+  </Accordion>
+</AccordionGroup>
+
+## App Manifest
+
+Your Teams app manifest (`manifest.json`) should include:
+
+```json
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "id": "YOUR_APP_ID",
+  "version": "1.0.0",
+  "bots": [
+    {
+      "botId": "YOUR_APP_ID",
+      "scopes": ["personal", "team", "groupchat"],
+      "supportsFiles": true,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["your-domain.com"]
+}
+```
+
+See [Teams manifest schema](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/schema/manifest-schema) for full reference.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Process messages and build conversation flows
+  </Card>
+  <Card title="Adaptive Cards" icon="sparkles" href="/features/cards">
+    Create interactive UIs with Adaptive Cards
+  </Card>
+  <Card title="Bot Framework" icon="robot" href="https://dev.botframework.com/">
+    Learn more about Azure Bot Service
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Persist data across requests
+  </Card>
+</CardGroup>

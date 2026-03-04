@@ -1,0 +1,398 @@
+---
+title: Posting Messages
+description: Send messages, cards, files, and ephemeral responses across chat platforms
+---
+
+The Chat SDK provides a unified API for posting messages across Slack, Teams, Google Chat, and Discord.
+
+## Basic Message Posting
+
+### Simple Text
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  // Simple string
+  await thread.post("Hello world!");
+  
+  // With emoji
+  await thread.post(`${emoji.thumbs_up} Great job!`);
+});
+```
+
+### Markdown
+
+Use the `markdown` format for cross-platform formatting:
+
+```typescript
+await thread.post({
+  markdown: `
+**Bold** and _italic_ text
+
+- List item 1
+- List item 2
+
+[Link](https://example.com)
+  `.trim()
+});
+```
+
+<Note>
+Markdown is automatically converted to platform-specific formats (Slack mrkdwn, Teams/Discord markdown, Google Chat HTML).
+</Note>
+
+### Raw Platform Text
+
+Skip markdown conversion and send platform-specific text:
+
+```typescript
+// Slack mrkdwn format
+await thread.post({
+  raw: "*Bold* and _italic_ in Slack format"
+});
+```
+
+### AST (Advanced)
+
+Use mdast AST for programmatic message construction:
+
+```typescript
+import { root, paragraph, text, strong, link } from "chat";
+
+await thread.post({
+  ast: root([
+    paragraph([
+      strong([text("Bold text")]),
+      text(" and "),
+      link("https://example.com", [text("a link")])
+    ])
+  ])
+});
+```
+
+## Interactive Cards
+
+Create rich interactive cards with buttons, inputs, and structured layouts:
+
+```tsx
+import { Card, Text, Button, Divider } from "chat";
+
+await thread.post(
+  <Card title="Order Approval">
+    <Text>Order #12345 requires approval</Text>
+    <Divider />
+    <Button id="approve" value="12345" style="primary">Approve</Button>
+    <Button id="reject" value="12345" style="danger">Reject</Button>
+  </Card>
+);
+
+// Handle button clicks
+chat.onAction(["approve", "reject"], async (event) => {
+  const orderId = event.value;
+  if (event.actionId === "approve") {
+    await event.thread.post(`✅ Order ${orderId} approved`);
+  } else {
+    await event.thread.post(`❌ Order ${orderId} rejected`);
+  }
+});
+```
+
+<Info>
+Cards are automatically converted to platform-specific formats: Slack Block Kit, Teams Adaptive Cards, and Google Chat Cards.
+</Info>
+
+## File Attachments
+
+### Uploading Files
+
+```typescript
+import { readFile } from "node:fs/promises";
+
+const fileData = await readFile("./report.pdf");
+
+await thread.post({
+  markdown: "Here's the report you requested:",
+  files: [
+    {
+      filename: "report.pdf",
+      data: fileData,
+      mimeType: "application/pdf"
+    }
+  ]
+});
+```
+
+### Multiple Files
+
+```typescript
+await thread.post({
+  markdown: "Quarterly reports:",
+  files: [
+    { filename: "q1.pdf", data: q1Data, mimeType: "application/pdf" },
+    { filename: "q2.pdf", data: q2Data, mimeType: "application/pdf" },
+    { filename: "summary.xlsx", data: xlsxData, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+  ]
+});
+```
+
+### Image Attachments
+
+```typescript
+// Link to existing images
+await thread.post({
+  markdown: "Check out this chart:",
+  attachments: [
+    {
+      type: "image",
+      url: "https://example.com/chart.png",
+      name: "Sales Chart"
+    }
+  ]
+});
+```
+
+## Ephemeral Messages
+
+Send messages visible only to a specific user:
+
+```typescript
+chat.onSlashCommand("/secret", async (event) => {
+  // Try native ephemeral (Slack/Google Chat)
+  const result = await event.channel.postEphemeral(
+    event.user,
+    "This message is only visible to you!",
+    { fallbackToDM: false }
+  );
+  
+  if (!result) {
+    // Platform doesn't support ephemeral - tell user
+    await event.channel.post("Sorry, this platform doesn't support private messages in channels.");
+  }
+});
+```
+
+### Fallback to DM
+
+On platforms without ephemeral support (Teams, Discord), automatically fall back to DM:
+
+```typescript
+// Always send (DM fallback on Teams/Discord)
+const result = await thread.postEphemeral(
+  user,
+  "Secret information!",
+  { fallbackToDM: true }
+);
+
+if (result.usedFallback) {
+  console.log("Sent via DM instead of ephemeral");
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="Slack" icon="slack">
+    Native ephemeral (session-dependent, disappears on reload)
+  </Card>
+  <Card title="Google Chat" icon="google">
+    Native private message (persists, only target user sees it)
+  </Card>
+  <Card title="Discord" icon="discord">
+    No native support - requires `fallbackToDM: true`
+  </Card>
+  <Card title="Teams" icon="microsoft">
+    No native support - requires `fallbackToDM: true`
+  </Card>
+</CardGroup>
+
+## Sent Message Operations
+
+All posting methods return a `SentMessage` with edit/delete capabilities:
+
+### Editing Messages
+
+```typescript
+const msg = await thread.post("Initial message");
+
+// Edit with new text
+await msg.edit("Updated message!");
+
+// Edit with markdown
+await msg.edit({
+  markdown: "**Updated** with _formatting_"
+});
+
+// Edit with a card
+await msg.edit(
+  <Card title="Updated">
+    <Text>This replaces the original message</Text>
+  </Card>
+);
+```
+
+### Deleting Messages
+
+```typescript
+const msg = await thread.post("Temporary message");
+
+// Wait 5 seconds then delete
+setTimeout(async () => {
+  await msg.delete();
+}, 5000);
+```
+
+### Adding Reactions
+
+```typescript
+import { emoji } from "chat";
+
+const msg = await thread.post("Check this out!");
+
+// Add reactions
+await msg.addReaction(emoji.thumbs_up);
+await msg.addReaction(emoji.eyes);
+
+// Remove a reaction
+await msg.removeReaction(emoji.thumbs_up);
+```
+
+## Typing Indicators
+
+Show that the bot is processing:
+
+```typescript
+chat.onSubscribedMessage(async (thread, message) => {
+  // Show typing indicator
+  await thread.startTyping("Thinking...");
+  
+  // Do some work
+  const response = await generateAIResponse(message.text);
+  
+  // Post response (typing indicator auto-clears)
+  await thread.post(response);
+});
+```
+
+<Note>
+Some platforms support persistent typing indicators with status text (Google Chat), others just send once (Slack).
+</Note>
+
+## Mentioning Users
+
+Create platform-specific user mentions:
+
+```typescript
+chat.onSubscribedMessage(async (thread, message) => {
+  const mention = thread.mentionUser(message.author.userId);
+  await thread.post(`Hey ${mention}, check this out!`);
+});
+```
+
+<CodeGroup>
+```typescript Slack
+// Output: <@U123456>
+const mention = thread.mentionUser("U123456");
+```
+
+```typescript Teams
+// Output: <at>User Name</at>
+const mention = thread.mentionUser(userId);
+```
+
+```typescript Google Chat
+// Output: <users/123456>
+const mention = thread.mentionUser("users/123456");
+```
+</CodeGroup>
+
+## Posting to Channels vs Threads
+
+### Thread-Level Posting
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  // Posts to the thread (replies to the conversation)
+  await thread.post("This is a reply in the thread");
+});
+```
+
+### Channel-Level Posting
+
+```typescript
+chat.onSlashCommand("/announce", async (event) => {
+  // Posts to the channel (top-level message)
+  await event.channel.post("This is a channel announcement");
+});
+
+// Or access channel from thread
+chat.onNewMention(async (thread, message) => {
+  await thread.channel.post("Posted to the channel, not the thread");
+});
+```
+
+<Warning>
+On platforms without native threading, thread and channel posting are the same. Always test cross-platform behavior.
+</Warning>
+
+## Opening Direct Messages
+
+Start a DM conversation with a user:
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  // Open DM with the user
+  const dmThread = await chat.openDM(message.author.userId);
+  await dmThread.post("Hey! I sent you a private message.");
+  
+  // Also reply in the original thread
+  await thread.post("I sent you a DM!");
+});
+
+// Or use Author object
+chat.onSubscribedMessage(async (thread, message) => {
+  const dmThread = await chat.openDM(message.author);
+  await dmThread.post("Private reply");
+});
+```
+
+## Message Content Extraction
+
+When you post a message, the SDK extracts content for the `SentMessage` object:
+
+```typescript
+// From thread.ts
+function extractMessageContent(message: AdapterPostableMessage): {
+  plainText: string;
+  formatted: Root;
+  attachments: Attachment[];
+} {
+  if (typeof message === "string") {
+    return {
+      plainText: message,
+      formatted: root([paragraph([textNode(message)])]),
+      attachments: [],
+    };
+  }
+
+  if ("markdown" in message) {
+    const ast = parseMarkdown(message.markdown);
+    return {
+      plainText: toPlainText(ast),
+      formatted: ast,
+      attachments: message.attachments || [],
+    };
+  }
+
+  if ("card" in message) {
+    const fallbackText = message.fallbackText || cardToFallbackText(message.card);
+    return {
+      plainText: fallbackText,
+      formatted: root([paragraph([textNode(fallbackText)])]),
+      attachments: [],
+    };
+  }
+  
+  // ... other formats
+}
+```
+
+<Tip>
+The SDK automatically converts all message formats to both plain text and mdast AST for consistency.
+</Tip>

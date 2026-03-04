@@ -1,0 +1,410 @@
+---
+title: File Attachments
+description: Send and receive file attachments in messages across chat platforms
+---
+
+# File Attachments
+
+The Chat SDK supports sending files and images, and reading attachments from incoming messages.
+
+## Sending Files
+
+Attach files when posting messages:
+
+```typescript
+import { readFile } from "fs/promises";
+
+const fileData = await readFile("./report.pdf");
+
+await thread.post({
+  raw: "Here's the report you requested",
+  files: [
+    {
+      filename: "report.pdf",
+      data: fileData,
+      mimeType: "application/pdf",
+    },
+  ],
+});
+```
+
+## FileUpload Interface
+
+```typescript
+interface FileUpload {
+  filename: string;              // File name with extension
+  data: Buffer | Blob | ArrayBuffer;  // Binary data
+  mimeType?: string;             // MIME type (inferred if not provided)
+}
+```
+
+## Sending Images
+
+Images are uploaded the same way:
+
+```typescript
+const imageData = await readFile("./chart.png");
+
+await thread.post({
+  markdown: "Here's the sales chart",
+  files: [
+    {
+      filename: "sales-chart.png",
+      data: imageData,
+      mimeType: "image/png",
+    },
+  ],
+});
+```
+
+## Multiple Files
+
+Send multiple files in one message:
+
+```typescript
+await thread.post({
+  raw: "Quarterly reports",
+  files: [
+    {
+      filename: "q1-report.pdf",
+      data: await readFile("./q1.pdf"),
+    },
+    {
+      filename: "q2-report.pdf",
+      data: await readFile("./q2.pdf"),
+    },
+    {
+      filename: "summary.xlsx",
+      data: await readFile("./summary.xlsx"),
+    },
+  ],
+});
+```
+
+## Files with Cards
+
+Attach files to card messages:
+
+```tsx
+import { Card, Text, Fields, Field } from "chat";
+
+await thread.post({
+  card: (
+    <Card title="Monthly Report">
+      <Fields>
+        <Field label="Period" value="March 2024" />
+        <Field label="Status" value="Completed" />
+      </Fields>
+      <Text>See attached PDF for full details.</Text>
+    </Card>
+  ),
+  files: [
+    {
+      filename: "march-report.pdf",
+      data: reportData,
+    },
+  ],
+});
+```
+
+## Reading Attachments
+
+Access attachments from incoming messages:
+
+```typescript
+interface Message {
+  attachments?: Attachment[];
+}
+
+interface Attachment {
+  type: "image" | "file" | "video" | "audio";
+  name?: string;         // Filename
+  url?: string;          // URL to the file
+  mimeType?: string;     // MIME type
+  size?: number;         // File size in bytes
+  width?: number;        // Image/video width
+  height?: number;       // Image/video height
+  data?: Buffer | Blob;  // Binary data (if already fetched)
+  
+  // Fetch the file data
+  fetchData?: () => Promise<Buffer>;
+}
+```
+
+## Example: Processing Image Attachments
+
+```typescript
+chat.onNewMessage(/analyze/, async (thread, message) => {
+  const imageAttachments = message.attachments?.filter(
+    (a) => a.type === "image"
+  );
+  
+  if (!imageAttachments || imageAttachments.length === 0) {
+    await thread.post("Please attach an image to analyze.");
+    return;
+  }
+  
+  for (const image of imageAttachments) {
+    // Download the image
+    const imageData = image.fetchData
+      ? await image.fetchData()
+      : image.data;
+    
+    if (imageData) {
+      // Process the image
+      const analysis = await analyzeImage(imageData);
+      await thread.post(
+        `Image: ${image.name}\nAnalysis: ${analysis}`
+      );
+    }
+  }
+});
+```
+
+## Fetching Private Files
+
+Some platforms (like Slack) require authentication to download files:
+
+```typescript
+chat.onSubscribedMessage(async (thread, message) => {
+  if (message.attachments) {
+    for (const attachment of message.attachments) {
+      if (attachment.fetchData) {
+        // Adapter handles authentication automatically
+        const data = await attachment.fetchData();
+        
+        // Process the file
+        await processFile(attachment.name, data);
+      }
+    }
+  }
+});
+```
+
+## File Metadata
+
+Access file information without downloading:
+
+```typescript
+chat.onNewMessage(/.*/, async (thread, message) => {
+  if (message.attachments) {
+    for (const file of message.attachments) {
+      console.log(`File: ${file.name}`);
+      console.log(`Type: ${file.type}`);
+      console.log(`MIME: ${file.mimeType}`);
+      console.log(`Size: ${file.size} bytes`);
+      console.log(`URL: ${file.url}`);
+    }
+  }
+});
+```
+
+## MIME Types
+
+Common MIME types:
+
+```typescript
+const mimeTypes = {
+  // Images
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  
+  // Documents
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  
+  // Text
+  txt: "text/plain",
+  csv: "text/csv",
+  json: "application/json",
+  xml: "text/xml",
+  
+  // Archives
+  zip: "application/zip",
+  tar: "application/x-tar",
+  gz: "application/gzip",
+};
+```
+
+## Example: File Upload Bot
+
+Collect files and generate a summary:
+
+```typescript
+import { Chat, Card, Text, Table, emoji } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+chat.onSlashCommand("/upload-files", async (event) => {
+  await event.channel.post(
+    "Please upload the files you want to process (attach them to your next message)."
+  );
+  
+  await event.channel.subscribe();
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  if (!message.attachments || message.attachments.length === 0) {
+    return;
+  }
+  
+  const fileInfo = message.attachments.map((file) => [
+    file.name || "unnamed",
+    file.type,
+    `${Math.round((file.size || 0) / 1024)} KB`,
+  ]);
+  
+  await thread.post(
+    <Card title={`${emoji.package} Files Received`}>
+      <Text>Processing {message.attachments.length} file(s)...</Text>
+      <Table
+        headers={["Filename", "Type", "Size"]}
+        rows={fileInfo}
+      />
+    </Card>
+  );
+  
+  // Process each file
+  for (const file of message.attachments) {
+    if (file.fetchData) {
+      const data = await file.fetchData();
+      await processUploadedFile(file.name, data);
+    }
+  }
+  
+  await thread.post(`${emoji.check} All files processed successfully!`);
+  await thread.unsubscribe();
+});
+```
+
+## Platform Support
+
+### Slack
+
+- ✅ Upload files via API
+- ✅ Download files with authentication
+- ✅ Image, video, audio, and document attachments
+
+### Microsoft Teams
+
+- ✅ File attachments in cards
+- ✅ Download via public URLs
+- ⚠️ Upload requires additional setup
+
+### Google Chat
+
+- ✅ Image attachments in cards
+- ✅ Download via public URLs
+- ⚠️ Limited file upload support
+
+## File Size Limits
+
+Each platform has different file size limits:
+
+- **Slack**: 1 GB (free tier: varies)
+- **Microsoft Teams**: 250 MB
+- **Google Chat**: 200 MB
+
+Always handle file size validation:
+
+```typescript
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+await thread.post({
+  raw: "Here's the file",
+  files: files.filter((f) => {
+    if (f.data.byteLength > MAX_FILE_SIZE) {
+      console.warn(`File ${f.filename} exceeds size limit`);
+      return false;
+    }
+    return true;
+  }),
+});
+```
+
+## Complete Example: Document Processor
+
+```typescript
+import { Chat, Card, Text, Actions, Button, emoji } from "chat";
+import { readFile } from "fs/promises";
+
+const chat = new Chat({ /* ... */ });
+
+// Upload document
+chat.onAction("upload_doc", async (event) => {
+  const docData = await readFile("./document.pdf");
+  
+  await event.thread.post({
+    card: (
+      <Card title="Document Ready">
+        <Text>Your processed document is attached.</Text>
+      </Card>
+    ),
+    files: [
+      {
+        filename: "processed-document.pdf",
+        data: docData,
+        mimeType: "application/pdf",
+      },
+    ],
+  });
+});
+
+// Process uploaded files
+chat.onNewMention(async (thread, message) => {
+  const attachments = message.attachments || [];
+  const pdfFiles = attachments.filter(
+    (a) => a.mimeType === "application/pdf"
+  );
+  
+  if (pdfFiles.length === 0) {
+    await thread.post(
+      `${emoji.warning} Please attach a PDF file.`
+    );
+    return;
+  }
+  
+  await thread.post(
+    `${emoji.hourglass} Processing ${pdfFiles.length} PDF(s)...`
+  );
+  
+  for (const pdf of pdfFiles) {
+    if (pdf.fetchData) {
+      const data = await pdf.fetchData();
+      const result = await processPDF(data);
+      
+      await thread.post(
+        <Card title={`${emoji.check} ${pdf.name} Processed`}>
+          <Text>Pages: {result.pageCount}</Text>
+          <Text>Text extracted: {result.textLength} characters</Text>
+          <Actions>
+            <Button id="download_text" value={pdf.name}>
+              Download Text
+            </Button>
+          </Actions>
+        </Card>
+      );
+    }
+  }
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Cards" icon="table-cells" href="/cards">
+    Display file metadata in rich cards
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/error-handling">
+    Handle file upload and download errors
+  </Card>
+</CardGroup>

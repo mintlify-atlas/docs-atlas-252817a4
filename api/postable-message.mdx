@@ -1,0 +1,231 @@
+---
+title: PostableMessage
+description: Type definitions for messages that can be posted to chat threads
+---
+
+A `PostableMessage` is the input type for posting messages to threads. It supports multiple formats: plain text, markdown, mdast AST, cards, and streaming.
+
+## Type Definition
+
+```typescript
+type PostableMessage = AdapterPostableMessage | AsyncIterable<string>;
+
+type AdapterPostableMessage =
+  | string
+  | PostableRaw
+  | PostableMarkdown
+  | PostableAst
+  | PostableCard
+  | CardElement;
+```
+
+## Message Formats
+
+### Plain String
+
+The simplest format - raw text passed through as-is to the platform.
+
+```typescript
+await thread.post("Hello, world!");
+```
+
+### PostableRaw
+
+Explicit raw text with optional attachments and files.
+
+```typescript
+interface PostableRaw {
+  /** Raw text passed through as-is to the platform */
+  raw: string;
+  /** File/image attachments */
+  attachments?: Attachment[];
+  /** Files to upload */
+  files?: FileUpload[];
+}
+```
+
+**Example:**
+
+```typescript
+await thread.post({
+  raw: "Check out this document",
+  files: [{
+    data: buffer,
+    filename: "report.pdf",
+    mimeType: "application/pdf"
+  }]
+});
+```
+
+### PostableMarkdown
+
+Markdown text that's automatically converted to platform-specific format.
+
+```typescript
+interface PostableMarkdown {
+  /** Markdown text, converted to platform format */
+  markdown: string;
+  /** File/image attachments */
+  attachments?: Attachment[];
+  /** Files to upload */
+  files?: FileUpload[];
+}
+```
+
+**Example:**
+
+```typescript
+await thread.post({
+  markdown: "**Bold** and _italic_ text with a [link](https://example.com)"
+});
+```
+
+### PostableAst
+
+mdast AST (Abstract Syntax Tree) for precise formatting control.
+
+```typescript
+interface PostableAst {
+  /** mdast AST, converted to platform format */
+  ast: Root;
+  /** File/image attachments */
+  attachments?: Attachment[];
+  /** Files to upload */
+  files?: FileUpload[];
+}
+```
+
+**Example:**
+
+```typescript
+import { parseMarkdown } from "chat";
+
+const ast = parseMarkdown("# Header\nContent");
+await thread.post({ ast });
+```
+
+### PostableCard
+
+Rich card with interactive components.
+
+```typescript
+interface PostableCard {
+  /** Rich card element */
+  card: CardElement;
+  /** Fallback text for platforms/clients that can't render cards */
+  fallbackText?: string;
+  /** Files to upload */
+  files?: FileUpload[];
+}
+```
+
+**Example:**
+
+```typescript
+import { Card, Text, Button, Actions } from "chat";
+
+await thread.post({
+  card: Card({
+    title: "Approval Required",
+    children: [
+      Text("Order #1234"),
+      Actions([
+        Button({ id: "approve", label: "Approve", style: "primary" }),
+        Button({ id: "reject", label: "Reject", style: "danger" })
+      ])
+    ]
+  }),
+  fallbackText: "Approval Required: Order #1234"
+});
+```
+
+### Streaming
+
+Stream text incrementally from AI models using AsyncIterable.
+
+```typescript
+await thread.post(asyncIterableStream);
+```
+
+**Example with AI SDK:**
+
+```typescript
+import { streamText } from "ai";
+
+const result = await streamText({
+  model: openai("gpt-4"),
+  prompt: message.text
+});
+
+await thread.post(result.textStream);
+```
+
+## Attachment Types
+
+### Attachment
+
+File/image attachments linked to messages.
+
+```typescript
+interface Attachment {
+  /** Type of attachment */
+  type: "image" | "file" | "video" | "audio";
+  /** URL to the file (for linking/downloading) */
+  url?: string;
+  /** Binary data (for uploading or if already fetched) */
+  data?: Buffer | Blob;
+  /**
+   * Fetch the attachment data.
+   * For platforms that require authentication (like Slack private URLs),
+   * this method handles the auth automatically.
+   */
+  fetchData?: () => Promise<Buffer>;
+  /** Filename */
+  name?: string;
+  /** MIME type */
+  mimeType?: string;
+  /** File size in bytes */
+  size?: number;
+  /** Image/video width (if applicable) */
+  width?: number;
+  /** Image/video height (if applicable) */
+  height?: number;
+}
+```
+
+### FileUpload
+
+File to upload with a message.
+
+```typescript
+interface FileUpload {
+  /** Binary data */
+  data: Buffer | Blob | ArrayBuffer;
+  /** Filename */
+  filename: string;
+  /** MIME type (optional, will be inferred from filename if not provided) */
+  mimeType?: string;
+}
+```
+
+**Example:**
+
+```typescript
+import fs from "fs";
+
+const pdfData = fs.readFileSync("report.pdf");
+
+await thread.post({
+  markdown: "Here's the monthly report",
+  files: [{
+    data: pdfData,
+    filename: "monthly-report.pdf",
+    mimeType: "application/pdf"
+  }]
+});
+```
+
+## Related Types
+
+- [Card Components](/api/cards) - Rich card elements for PostableCard
+- [Markdown Utilities](/api/markdown) - Functions for working with markdown and AST

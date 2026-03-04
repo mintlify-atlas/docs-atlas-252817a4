@@ -1,0 +1,266 @@
+---
+title: State Management Overview
+description: State adapters for thread subscriptions, distributed locking, and caching in Chat SDK
+---
+
+State adapters provide persistence for:
+- **Thread subscriptions** - Track which threads your bot is monitoring
+- **Distributed locks** - Prevent concurrent message processing across instances
+- **Caching** - Store temporary data with TTL support
+
+All state operations use the `StateAdapter` interface, making it easy to swap implementations.
+
+## Available Adapters
+
+<CardGroup cols={3}>
+  <Card title="Memory" icon="memory" href="/state/memory">
+    Development & testing
+  </Card>
+  <Card title="Redis" icon="database" href="/state/redis">
+    Production (recommended)
+  </Card>
+  <Card title="ioredis" icon="database" href="/state/ioredis">
+    Production with Cluster/Sentinel
+  </Card>
+</CardGroup>
+
+## StateAdapter Interface
+
+All state adapters implement this interface from `chat/src/types.ts:467-499`:
+
+```typescript
+export interface StateAdapter {
+  // Connection management
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+
+  // Thread subscriptions
+  subscribe(threadId: string): Promise<void>;
+  unsubscribe(threadId: string): Promise<void>;
+  isSubscribed(threadId: string): Promise<boolean>;
+
+  // Distributed locking
+  acquireLock(threadId: string, ttlMs: number): Promise<Lock | null>;
+  releaseLock(lock: Lock): Promise<void>;
+  extendLock(lock: Lock, ttlMs: number): Promise<boolean>;
+
+  // Caching (generic key-value store)
+  get<T = unknown>(key: string): Promise<T | null>;
+  set<T = unknown>(key: string, value: T, ttlMs?: number): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
+export interface Lock {
+  threadId: string;
+  token: string;
+  expiresAt: number;
+}
+```
+
+## Thread Subscriptions
+
+Subscriptions persist which threads your bot is actively monitoring. When subscribed, all future messages in that thread trigger `onSubscribedMessage` handlers.
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe(); // Persist subscription
+  await thread.post("I'll monitor this thread for updates!");
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  // Called for all messages in subscribed threads
+  await thread.post(`Got your message: ${message.text}`);
+});
+```
+
+### How It Works
+
+1. User @-mentions your bot → triggers `onNewMention`
+2. Handler calls `thread.subscribe()` → adds threadId to state
+3. Future messages check `state.isSubscribed(threadId)`
+4. Subscribed messages trigger `onSubscribedMessage` handlers
+
+<Note>
+Subscriptions persist across restarts (except with MemoryStateAdapter). Your bot automatically resumes monitoring threads after deployment.
+</Note>
+
+## Distributed Locking
+
+Locks prevent concurrent processing of the same thread across multiple server instances or requests.
+
+### Why Locking Matters
+
+Without locks:
+- Webhook retries could trigger duplicate processing
+- Multiple serverless instances could race on the same message
+- Concurrent edits to thread state could corrupt data
+
+With locks:
+```typescript
+// Automatic locking in Chat SDK (internal)
+const lock = await state.acquireLock(threadId, 30000); // 30s TTL
+if (!lock) {
+  // Another instance is already processing this thread
+  return;
+}
+
+try {
+  await processMessage(thread, message);
+} finally {
+  await state.releaseLock(lock);
+}
+```
+
+### Lock Properties
+
+- **TTL-based** - Locks auto-expire to prevent deadlocks from crashed instances
+- **Token-based** - Only the lock holder can release or extend it
+- **Atomic** - Acquisition uses `SET NX EX` for race-free locking
+
+<Warning>
+Always set a reasonable TTL (default: 30s). If your message handler can take longer, use `extendLock()` to refresh the TTL periodically.
+</Warning>
+
+## Caching
+
+The cache API provides generic key-value storage with optional TTL:
+
+```typescript
+const state = chat.getState();
+
+// Store with 5-minute TTL
+await state.set('user:123:preferences', { theme: 'dark' }, 5 * 60 * 1000);
+
+// Retrieve
+const prefs = await state.get<UserPreferences>('user:123:preferences');
+
+// Delete
+await state.delete('user:123:preferences');
+```
+
+### Use Cases
+
+- **Rate limiting** - Track API call counts per user
+- **User preferences** - Cache settings between messages
+- **Temporary state** - Store wizard/form progress
+- **Deduplication** - Track processed message IDs
+
+<Note>
+Chat SDK uses the cache internally for message deduplication (5-minute TTL by default, configurable via `dedupeTtlMs`).
+</Note>
+
+## Choosing an Adapter
+
+<AccordionGroup>
+  <Accordion title="Memory - Development & Testing">
+    **Pros:**
+    - Zero configuration
+    - No external dependencies
+    - Fast for local development
+
+    **Cons:**
+    - State lost on restart
+    - Not shared across instances
+    - Console warning in production
+
+    **When to use:** Local development, unit tests, quick prototypes
+  </Accordion>
+
+  <Accordion title="Redis - Production (Recommended)">
+    **Pros:**
+    - Official redis package
+    - Simple connection string
+    - Wide hosting support (Vercel, Railway, Render)
+    - Automatic reconnection
+
+    **Cons:**
+    - Requires Redis server
+    - No built-in clustering
+
+    **When to use:** Production deployments with single Redis instance
+  </Accordion>
+
+  <Accordion title="ioredis - Advanced Production">
+    **Pros:**
+    - Redis Cluster support
+    - Sentinel support for HA
+    - More configuration options
+    - Can reuse existing client
+
+    **Cons:**
+    - Requires Redis server
+    - More complex setup
+
+    **When to use:** High-availability setups, Redis Cluster, existing ioredis usage
+  </Accordion>
+</AccordionGroup>
+
+## Connection Management
+
+All adapters require explicit connection before use:
+
+```typescript
+import { Chat } from 'chat';
+import { createRedisState } from '@chat-adapter/state-redis';
+
+const state = createRedisState({ url: process.env.REDIS_URL });
+await state.connect();
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state,
+});
+```
+
+<Warning>
+The Chat SDK automatically calls `connect()` during initialization. You typically don't need to call it manually.
+</Warning>
+
+### Disconnection
+
+For graceful shutdown:
+
+```typescript
+process.on('SIGTERM', async () => {
+  await state.disconnect();
+  process.exit(0);
+});
+```
+
+## Error Handling
+
+State adapters throw errors for:
+- Connection failures
+- Operations before `connect()` is called
+- Network timeouts (Redis adapters)
+
+```typescript
+try {
+  await thread.subscribe();
+} catch (error) {
+  logger.error('Failed to subscribe', { error, threadId: thread.id });
+  // Decide: retry, fall back, or notify user
+}
+```
+
+<Note>
+Redis adapters log connection errors but don't throw during background operations. Monitor your logs for `"Redis client error"` messages.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Memory Adapter" icon="memory" href="/state/memory">
+    Quick setup for development
+  </Card>
+  <Card title="Redis Adapter" icon="database" href="/state/redis">
+    Production deployment guide
+  </Card>
+  <Card title="ioredis Adapter" icon="server" href="/state/ioredis">
+    Cluster and Sentinel setup
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts">
+    Learn about threads and subscriptions
+  </Card>
+</CardGroup>

@@ -1,0 +1,500 @@
+---
+title: Chat Class
+description: Main entry point for creating chat bots with handlers and webhooks
+---
+
+The `Chat` class is the central orchestrator that manages adapters, event handlers, and webhook processing.
+
+## Constructor
+
+```typescript
+new Chat<TAdapters, TState>(config: ChatConfig<TAdapters>)
+```
+
+<ParamField path="config" type="ChatConfig<TAdapters>" required>
+  Configuration object for the Chat instance
+
+  <Expandable title="properties">
+    <ParamField path="userName" type="string" required>
+      Default bot username across all adapters
+    </ParamField>
+    <ParamField path="adapters" type="Record<string, Adapter>" required>
+      Map of adapter name to adapter instance
+    </ParamField>
+    <ParamField path="state" type="StateAdapter" required>
+      State adapter for subscriptions and locking
+    </ParamField>
+    <ParamField path="logger" type="Logger | LogLevel">
+      Logger instance or log level ("silent" | "error" | "warn" | "info" | "debug")
+    </ParamField>
+    <ParamField path="dedupeTtlMs" type="number" default="300000">
+      TTL for message deduplication entries in milliseconds (5 minutes default)
+    </ParamField>
+    <ParamField path="streamingUpdateIntervalMs" type="number" default="500">
+      Update interval for fallback streaming (post + edit) in milliseconds
+    </ParamField>
+    <ParamField path="fallbackStreamingPlaceholderText" type="string | null" default='"..."'>
+      Placeholder text for fallback streaming. Set to `null` to wait until some text has been streamed before creating the message.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="chat" type="Chat<TAdapters, TState>">
+  Initialized Chat instance with type-safe adapter access and webhook handlers
+</ResponseField>
+
+### Example
+
+```typescript
+import { Chat } from "chat";
+import { createSlackAdapter } from "@chat-adapter/slack";
+import { createRedisState } from "@chat-state/redis";
+
+interface MyThreadState {
+  aiMode?: boolean;
+  userName?: string;
+}
+
+const chat = new Chat<typeof adapters, MyThreadState>({
+  userName: "mybot",
+  adapters: {
+    slack: createSlackAdapter({
+      botToken: process.env.SLACK_BOT_TOKEN,
+      signingSecret: process.env.SLACK_SIGNING_SECRET,
+    }),
+  },
+  state: createRedisState({ url: process.env.REDIS_URL }),
+  logger: "info",
+});
+```
+
+## Properties
+
+### webhooks
+
+```typescript
+readonly webhooks: Webhooks<TAdapters>
+```
+
+Type-safe webhook handlers keyed by adapter name. Each webhook handler processes incoming requests from the platform.
+
+```typescript
+// Type: (request: Request, options?: WebhookOptions) => Promise<Response>
+export async function POST(request: Request) {
+  return chat.webhooks.slack(request, { 
+    waitUntil: (p) => after(() => p) 
+  });
+}
+```
+
+## Event Handler Methods
+
+### onNewMention()
+
+```typescript
+onNewMention(handler: MentionHandler<TState>): void
+```
+
+Register a handler for new @-mentions of the bot in **unsubscribed** threads only.
+
+<ParamField path="handler" type="(thread: Thread<TState>, message: Message) => void | Promise<void>" required>
+  Handler called when the bot is @-mentioned in an unsubscribed thread
+</ParamField>
+
+<Warning>
+This handler is ONLY called for mentions in **unsubscribed** threads. Once a thread is subscribed via `thread.subscribe()`, subsequent messages (including @-mentions) go to `onSubscribedMessage` handlers instead.
+</Warning>
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await thread.post("Hello! I'll be watching this thread.");
+});
+```
+
+### onNewMessage()
+
+```typescript
+onNewMessage(pattern: RegExp, handler: MessageHandler<TState>): void
+```
+
+Register a handler for messages matching a regex pattern in unsubscribed threads.
+
+<ParamField path="pattern" type="RegExp" required>
+  Regular expression to match against message text
+</ParamField>
+<ParamField path="handler" type="(thread: Thread<TState>, message: Message) => void | Promise<void>" required>
+  Handler called when pattern matches
+</ParamField>
+
+```typescript
+// Match messages starting with "!help"
+chat.onNewMessage(/^!help/, async (thread, message) => {
+  await thread.post("Available commands: !help, !status, !ping");
+});
+```
+
+### onSubscribedMessage()
+
+```typescript
+onSubscribedMessage(handler: SubscribedMessageHandler<TState>): void
+```
+
+Register a handler for all messages in subscribed threads.
+
+<ParamField path="handler" type="(thread: Thread<TState>, message: Message) => void | Promise<void>" required>
+  Handler called for all messages in subscribed threads
+</ParamField>
+
+<Note>
+Does NOT fire for:
+- The message that triggered the subscription (e.g., the initial @mention)
+- Messages sent by the bot itself
+</Note>
+
+```typescript
+chat.onSubscribedMessage(async (thread, message) => {
+  if (message.isMention) {
+    await thread.post("You mentioned me again!");
+  }
+  await thread.post(`Got your message: ${message.text}`);
+});
+```
+
+### onReaction()
+
+```typescript
+onReaction(handler: ReactionHandler): void
+onReaction(emoji: EmojiFilter[], handler: ReactionHandler): void
+```
+
+Register a handler for reaction events (emoji added/removed).
+
+<ParamField path="emoji" type="Array<EmojiValue | string>">
+  Optional array of emoji to filter. Empty or omitted means all emoji.
+</ParamField>
+<ParamField path="handler" type="(event: ReactionEvent) => void | Promise<void>" required>
+  Handler called when reaction is added/removed
+</ParamField>
+
+```typescript
+import { emoji } from "chat";
+
+// Handle specific emoji using EmojiValue objects (recommended)
+chat.onReaction([emoji.thumbs_up, emoji.heart], async (event) => {
+  if (event.emoji === emoji.thumbs_up) {
+    await event.thread.post("Thanks for the thumbs up!");
+  }
+});
+
+// Handle all reactions
+chat.onReaction(async (event) => {
+  console.log(`${event.added ? "Added" : "Removed"} ${event.emoji.name}`);
+});
+```
+
+### onAction()
+
+```typescript
+onAction(handler: ActionHandler): void
+onAction(actionIds: string[] | string, handler: ActionHandler): void
+```
+
+Register a handler for action events (button clicks in cards).
+
+<ParamField path="actionIds" type="string | string[]">
+  Optional action ID(s) to filter. Empty or omitted means all actions.
+</ParamField>
+<ParamField path="handler" type="(event: ActionEvent) => void | Promise<void>" required>
+  Handler called when button is clicked
+</ParamField>
+
+```typescript
+// Handle specific action
+chat.onAction("approve", async (event) => {
+  await event.thread.post(`Order ${event.value} approved by ${event.user.userName}`);
+});
+
+// Handle multiple actions
+chat.onAction(["approve", "reject"], async (event) => {
+  if (event.actionId === "approve") {
+    await event.thread.post("Approved!");
+  } else {
+    await event.thread.post("Rejected!");
+  }
+});
+
+// Catch-all handler
+chat.onAction(async (event) => {
+  console.log(`Action: ${event.actionId}`);
+});
+```
+
+### onSlashCommand()
+
+```typescript
+onSlashCommand(handler: SlashCommandHandler<TState>): void
+onSlashCommand(commands: string[] | string, handler: SlashCommandHandler<TState>): void
+```
+
+Register a handler for slash command events.
+
+<ParamField path="commands" type="string | string[]">
+  Optional command(s) to filter (e.g., "/help" or ["help", "/help"]). Empty or omitted means all commands.
+</ParamField>
+<ParamField path="handler" type="(event: SlashCommandEvent<TState>) => void | Promise<void>" required>
+  Handler called when command is invoked
+</ParamField>
+
+```typescript
+// Handle specific command
+chat.onSlashCommand("/help", async (event) => {
+  await event.channel.post("Here are the available commands...");
+});
+
+// Open a modal from a slash command
+chat.onSlashCommand("/feedback", async (event) => {
+  await event.openModal({
+    type: "modal",
+    callbackId: "feedback_modal",
+    title: "Submit Feedback",
+    children: [
+      { type: "text_input", id: "feedback", label: "Your feedback" }
+    ],
+  });
+});
+```
+
+### onModalSubmit()
+
+```typescript
+onModalSubmit(handler: ModalSubmitHandler): void
+onModalSubmit(callbackIds: string[] | string, handler: ModalSubmitHandler): void
+```
+
+Register a handler for modal/dialog form submissions.
+
+<ParamField path="callbackIds" type="string | string[]">
+  Optional callback ID(s) to filter. Empty or omitted means all modals.
+</ParamField>
+<ParamField path="handler" type="(event: ModalSubmitEvent) => void | Promise<ModalResponse | undefined>" required>
+  Handler called when modal is submitted. Can return ModalResponse to update/close the modal.
+</ParamField>
+
+```typescript
+chat.onModalSubmit("feedback_modal", async (event) => {
+  const feedback = event.values.feedback;
+  // Process feedback...
+  
+  // Optionally return response to close modal
+  return { action: "close" };
+});
+```
+
+### onModalClose()
+
+```typescript
+onModalClose(handler: ModalCloseHandler): void
+onModalClose(callbackIds: string[] | string, handler: ModalCloseHandler): void
+```
+
+Register a handler for modal close/cancel events.
+
+<ParamField path="callbackIds" type="string | string[]">
+  Optional callback ID(s) to filter. Empty or omitted means all modals.
+</ParamField>
+<ParamField path="handler" type="(event: ModalCloseEvent) => void | Promise<void>" required>
+  Handler called when modal is closed/cancelled
+</ParamField>
+
+## Utility Methods
+
+### initialize()
+
+```typescript
+async initialize(): Promise<void>
+```
+
+Manually initialize the chat instance and all adapters. This is called automatically when handling webhooks, but can be called manually for non-webhook use cases (e.g., Gateway listeners).
+
+```typescript
+await chat.initialize();
+```
+
+### shutdown()
+
+```typescript
+async shutdown(): Promise<void>
+```
+
+Gracefully shut down the chat instance and disconnect from the state backend.
+
+```typescript
+await chat.shutdown();
+```
+
+### getAdapter()
+
+```typescript
+getAdapter<K extends keyof TAdapters>(name: K): TAdapters[K]
+```
+
+Get an adapter by name with type safety.
+
+<ParamField path="name" type="K extends keyof TAdapters" required>
+  Adapter name (key from the adapters config)
+</ParamField>
+
+<ResponseField name="adapter" type="TAdapters[K]">
+  The adapter instance
+</ResponseField>
+
+```typescript
+const slackAdapter = chat.getAdapter("slack");
+```
+
+### openDM()
+
+```typescript
+async openDM(user: string | Author): Promise<Thread<TState>>
+```
+
+Open a direct message conversation with a user. The adapter is automatically inferred from the userId format.
+
+<ParamField path="user" type="string | Author" required>
+  Platform-specific user ID string, or an Author object from message.author or event.user
+</ParamField>
+
+<ResponseField name="thread" type="Thread<TState>">
+  A Thread that can be used to post messages
+</ResponseField>
+
+**User ID Formats:**
+- Slack: `U...` (e.g., "U00FAKEUSER1")
+- Teams: `29:...` (e.g., "29:198PbJuw...")
+- Google Chat: `users/...` (e.g., "users/100000000000000000001")
+- Discord: numeric snowflake (e.g., "1033044521375764530")
+
+```typescript
+// Using user ID directly
+const dmThread = await chat.openDM("U123456");
+await dmThread.post("Hello via DM!");
+
+// Using Author object from a message
+chat.onSubscribedMessage(async (thread, message) => {
+  const dmThread = await chat.openDM(message.author);
+  await dmThread.post("Hello via DM!");
+});
+```
+
+### channel()
+
+```typescript
+channel(channelId: string): Channel<TState>
+```
+
+Get a Channel by its channel ID. The adapter is automatically inferred from the channel ID prefix.
+
+<ParamField path="channelId" type="string" required>
+  Channel ID (e.g., "slack:C123ABC", "gchat:spaces/ABC123")
+</ParamField>
+
+<ResponseField name="channel" type="Channel<TState>">
+  A Channel that can be used to list threads, post messages, etc.
+</ResponseField>
+
+```typescript
+const channel = chat.channel("slack:C123ABC");
+
+// Iterate messages newest first
+for await (const msg of channel.messages) {
+  console.log(msg.text);
+}
+
+// Post to channel
+await channel.post("Hello channel!");
+```
+
+### reviver()
+
+```typescript
+reviver(): (key: string, value: unknown) => unknown
+```
+
+Get a JSON.parse reviver function that automatically deserializes Thread, Channel, and Message objects.
+
+<ResponseField name="reviver" type="(key: string, value: unknown) => unknown">
+  Reviver function for JSON.parse
+</ResponseField>
+
+```typescript
+// Parse workflow payload with automatic deserialization
+const data = JSON.parse(payload, chat.reviver());
+
+// data.thread is now a ThreadImpl instance
+await data.thread.post("Hello from workflow!");
+```
+
+### registerSingleton()
+
+```typescript
+registerSingleton(): this
+```
+
+Register this Chat instance as the global singleton. Required for Thread deserialization via @workflow/serde.
+
+<ResponseField name="this" type="Chat<TAdapters, TState>">
+  Returns the Chat instance for chaining
+</ResponseField>
+
+```typescript
+const chat = new Chat({ ... }).registerSingleton();
+
+// Now threads can be deserialized without passing chat explicitly
+const thread = ThreadImpl.fromJSON(serializedThread);
+```
+
+### Static Methods
+
+#### getSingleton()
+
+```typescript
+static getSingleton(): Chat
+```
+
+Get the registered singleton Chat instance. Throws if no singleton has been registered.
+
+```typescript
+const chat = Chat.getSingleton();
+```
+
+#### hasSingleton()
+
+```typescript
+static hasSingleton(): boolean
+```
+
+Check if a singleton has been registered.
+
+```typescript
+if (Chat.hasSingleton()) {
+  const chat = Chat.getSingleton();
+}
+```
+
+## Type Parameters
+
+<ParamField path="TAdapters" type="Record<string, Adapter>" default="Record<string, Adapter>">
+  Map of adapter names to Adapter instances for type-safe webhook access
+</ParamField>
+
+<ParamField path="TState" type="object" default="Record<string, unknown>">
+  Custom state type stored per-thread and per-channel
+</ParamField>
+
+## See Also
+
+- [Thread API](/api/thread) - Thread interface for message posting and state
+- [Channel API](/api/channel) - Channel interface for channel-level operations
+- [Message API](/api/message) - Message structure and metadata
+- [Event Handlers](/core/handlers) - Detailed handler documentation

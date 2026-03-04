@@ -1,0 +1,379 @@
+---
+title: Ephemeral Messages
+description: Send private messages visible only to specific users in channels
+---
+
+# Ephemeral Messages
+
+Ephemeral messages are visible only to a specific user in a channel or thread. They're perfect for:
+
+- Error messages and validation feedback
+- Help text and usage instructions  
+- Private confirmations and status updates
+- User-specific data that shouldn't clutter the channel
+
+## Platform Behavior
+
+Different platforms handle ephemeral messages differently:
+
+- **Slack**: Native ephemeral messages (session-dependent, disappear on reload)
+- **Google Chat**: Native private messages (persist, only target user sees them)
+- **Discord**: No native support - must use DM fallback
+- **Microsoft Teams**: No native support - must use DM fallback
+
+## Posting Ephemeral Messages
+
+Use `thread.postEphemeral()` or `channel.postEphemeral()`:
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  // Send ephemeral message to the user who mentioned the bot
+  await thread.postEphemeral(
+    message.author,
+    "Only you can see this message!",
+    { fallbackToDM: true }
+  );
+});
+```
+
+## Method Signature
+
+```typescript
+interface Thread {
+  postEphemeral(
+    user: string | Author,
+    message: AdapterPostableMessage | CardJSXElement,
+    options: PostEphemeralOptions
+  ): Promise<EphemeralMessage | null>;
+}
+
+interface PostEphemeralOptions {
+  /**
+   * Controls behavior when native ephemeral is not supported.
+   * - true: Falls back to sending a DM to the user
+   * - false: Returns null if native ephemeral is not supported
+   */
+  fallbackToDM: boolean;
+}
+```
+
+## Fallback to DM
+
+When `fallbackToDM: true`, the SDK automatically sends a DM if the platform doesn't support native ephemeral messages:
+
+```typescript
+// Always send (DM fallback on Discord/Teams)
+const result = await thread.postEphemeral(
+  user,
+  "Only you can see this!",
+  { fallbackToDM: true }
+);
+
+if (result?.usedFallback) {
+  console.log("Sent as DM because platform doesn't support ephemeral");
+}
+```
+
+## No Fallback
+
+When `fallbackToDM: false`, the method returns `null` if native ephemeral isn't supported:
+
+```typescript
+// Only send if native ephemeral supported
+const result = await thread.postEphemeral(
+  user,
+  "Secret!",
+  { fallbackToDM: false }
+);
+
+if (!result) {
+  // Platform doesn't support native ephemeral
+  // Handle accordingly (e.g., post public message instead)
+  await thread.post("Please check your DMs for details.");
+}
+```
+
+## EphemeralMessage Response
+
+```typescript
+interface EphemeralMessage {
+  id: string;           // Message ID (may be empty for some platforms)
+  threadId: string;     // Thread ID (or DM thread if fallback used)
+  usedFallback: boolean; // Whether DM fallback was used
+  raw: unknown;         // Platform-specific raw response
+}
+```
+
+## User Parameter
+
+Pass either a user ID string or an `Author` object:
+
+```typescript
+// From message author
+await thread.postEphemeral(
+  message.author,
+  "Private feedback",
+  { fallbackToDM: true }
+);
+
+// From event user
+chat.onAction("button", async (event) => {
+  await event.thread.postEphemeral(
+    event.user,
+    "Action received!",
+    { fallbackToDM: false }
+  );
+});
+
+// Using user ID string
+await thread.postEphemeral(
+  "U123ABC456",  // Slack user ID
+  "Hello!",
+  { fallbackToDM: true }
+);
+```
+
+## Message Content Types
+
+Ephemeral messages support the same content types as regular messages (except streaming):
+
+### Plain Text
+
+```typescript
+await thread.postEphemeral(
+  user,
+  "This is a private message.",
+  { fallbackToDM: true }
+);
+```
+
+### Markdown
+
+```typescript
+await thread.postEphemeral(
+  user,
+  { markdown: "**Bold** and _italic_ text" },
+  { fallbackToDM: true }
+);
+```
+
+### Rich Cards
+
+```tsx
+import { Card, Text, Actions, Button } from "chat";
+
+await thread.postEphemeral(
+  user,
+  <Card title="Private Actions">
+    <Text>Choose an option:</Text>
+    <Actions>
+      <Button id="option1">Option 1</Button>
+      <Button id="option2">Option 2</Button>
+    </Actions>
+  </Card>,
+  { fallbackToDM: false }
+);
+```
+
+## Example: Error Validation
+
+Show error messages only to the user who triggered them:
+
+```typescript
+import { emoji } from "chat";
+
+chat.onSlashCommand("/deploy", async (event) => {
+  const branch = event.text;
+  
+  if (!branch) {
+    await event.channel.postEphemeral(
+      event.user,
+      `${emoji.warning} Usage: /deploy <branch-name>`,
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  // Validate branch
+  const isValid = await validateBranch(branch);
+  
+  if (!isValid) {
+    await event.channel.postEphemeral(
+      event.user,
+      `${emoji.x} Branch "${branch}" not found. Please check the name.`,
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  // Post public confirmation
+  await event.channel.post(
+    `${emoji.rocket} Deploying ${branch}...`
+  );
+});
+```
+
+## Example: Help Text
+
+Show help information privately:
+
+```typescript
+import { Card, Text, emoji } from "chat";
+
+chat.onSlashCommand("/help", async (event) => {
+  await event.channel.postEphemeral(
+    event.user,
+    <Card title={`${emoji.lightbulb} Available Commands`}>
+      <Text style="bold">Bot Commands:</Text>
+      <Text>
+        /help - Show this help message\n
+        /status - Check system status\n
+        /deploy &lt;branch&gt; - Deploy a branch\n
+        /rollback - Rollback last deployment
+      </Text>
+    </Card>,
+    { fallbackToDM: false }
+  );
+});
+```
+
+## Example: Private Confirmation
+
+Confirm actions privately while posting public status:
+
+```typescript
+chat.onAction("approve", async (event) => {
+  // Public confirmation
+  await event.thread.post(
+    `${emoji.check} Order approved by ${event.user.userName}`
+  );
+  
+  // Private receipt to approver
+  await event.thread.postEphemeral(
+    event.user,
+    <Card title="Approval Receipt">
+      <Text>You approved order #{event.value}</Text>
+      <Text style="muted">A confirmation email has been sent.</Text>
+    </Card>,
+    { fallbackToDM: true }
+  );
+});
+```
+
+## Channel Ephemeral Messages
+
+Use `channel.postEphemeral()` for channel-level messages:
+
+```typescript
+chat.onSlashCommand("/info", async (event) => {
+  const info = await event.channel.fetchMetadata();
+  
+  await event.channel.postEphemeral(
+    event.user,
+    `Channel: ${info.name}\nMembers: ${info.memberCount}`,
+    { fallbackToDM: false }
+  );
+});
+```
+
+## Limitations
+
+<Warning>
+  Ephemeral messages do not support streaming. If you try to pass an `AsyncIterable<string>`, it will fail.
+</Warning>
+
+<Note>
+  Ephemeral messages cannot be edited or deleted after posting (platform limitation).
+</Note>
+
+<Note>
+  On Slack, ephemeral messages disappear when the user reloads their app. They are session-dependent.
+</Note>
+
+## Complete Example
+
+Slash command with ephemeral validation and public result:
+
+```typescript
+import { Chat, Card, Text, Fields, Field, emoji } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+chat.onSlashCommand("/create-ticket", async (event) => {
+  const title = event.text;
+  
+  // Validate input (ephemeral error)
+  if (!title) {
+    await event.channel.postEphemeral(
+      event.user,
+      `${emoji.warning} Usage: /create-ticket <title>`,
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  if (title.length < 5) {
+    await event.channel.postEphemeral(
+      event.user,
+      `${emoji.x} Title must be at least 5 characters`,
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  // Create ticket
+  const ticket = await createTicket({
+    title,
+    createdBy: event.user.userId,
+  });
+  
+  // Public confirmation
+  await event.channel.post(
+    <Card title={`${emoji.check} Ticket Created`}>
+      <Fields>
+        <Field label="ID" value={ticket.id} />
+        <Field label="Title" value={title} />
+        <Field label="Created by" value={event.user.userName} />
+      </Fields>
+    </Card>
+  );
+  
+  // Private receipt to creator
+  await event.channel.postEphemeral(
+    event.user,
+    `${emoji.bell} You'll be notified when your ticket is updated.`,
+    { fallbackToDM: true }
+  );
+});
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use ephemeral for errors and validation">
+    Error messages should be shown only to the user who triggered them, not the entire channel.
+  </Accordion>
+  
+  <Accordion title="Provide public confirmation for actions">
+    When a user performs an action, post a public message for transparency and a private ephemeral for personal confirmation.
+  </Accordion>
+  
+  <Accordion title="Consider platform differences">
+    Remember that Slack ephemeral messages are session-dependent, while Google Chat private messages persist.
+  </Accordion>
+  
+  <Accordion title="Use fallbackToDM for important messages">
+    If the message must reach the user regardless of platform, set fallbackToDM: true.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Direct Messages" icon="envelope" href="/direct-messages">
+    Send persistent private messages via DM
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/error-handling">
+    Handle errors in ephemeral message delivery
+  </Card>
+</CardGroup>

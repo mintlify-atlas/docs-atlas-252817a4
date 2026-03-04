@@ -1,0 +1,370 @@
+---
+title: Slash Command Handling
+description: Handle slash commands like /help, /status, and custom commands in your chat bot
+---
+
+# Slash Command Handling
+
+Slash commands let users invoke your bot's functionality by typing `/command` in the message composer. The SDK provides a unified API for handling slash commands across platforms.
+
+## Registering Commands
+
+Handle specific commands:
+
+```typescript
+import { Chat } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+chat.onSlashCommand("/help", async (event) => {
+  await event.channel.post("Here are the available commands...");
+});
+
+chat.onSlashCommand("/status", async (event) => {
+  await event.channel.post("All systems operational!");
+});
+```
+
+Handle multiple commands with one handler:
+
+```typescript
+chat.onSlashCommand(["/help", "/info", "/about"], async (event) => {
+  await event.channel.post(`You invoked ${event.command}`);
+});
+```
+
+Catch-all handler for any command:
+
+```typescript
+chat.onSlashCommand(async (event) => {
+  console.log(`Command: ${event.command}`);
+  console.log(`Arguments: ${event.text}`);
+});
+```
+
+## Slash Command Event
+
+Handlers receive a `SlashCommandEvent` with full context:
+
+```typescript
+interface SlashCommandEvent {
+  command: string;         // The command name (e.g., "/help")
+  text: string;            // Arguments after the command
+  user: Author;            // Who invoked the command
+  channel: Channel;        // Where it was invoked
+  triggerId?: string;      // For opening modals (time-limited)
+  adapter: Adapter;        // Platform adapter
+  raw: unknown;            // Platform-specific data
+  
+  // Open a modal in response
+  openModal(modal: ModalElement): Promise<{ viewId: string } | undefined>;
+}
+```
+
+## Command Arguments
+
+Access arguments via `event.text`:
+
+```typescript
+chat.onSlashCommand("/search", async (event) => {
+  const query = event.text; // Everything after "/search "
+  
+  if (!query) {
+    await event.channel.postEphemeral(
+      event.user,
+      "Usage: /search <query>",
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  const results = await searchDocuments(query);
+  
+  await event.channel.post(`Found ${results.length} results for "${query}"`);
+});
+```
+
+Parse complex arguments:
+
+```typescript
+chat.onSlashCommand("/remind", async (event) => {
+  // "/remind @alice in 1h about meeting"
+  const parts = event.text.split(" in ");
+  const user = parts[0];
+  const [time, ...messageParts] = parts[1].split(" about ");
+  const message = messageParts.join(" about ");
+  
+  await scheduleReminder(user, time, message);
+  await event.channel.post(`Reminder set for ${user}`);
+});
+```
+
+## Posting Responses
+
+### Public Response
+
+Visible to everyone in the channel:
+
+```typescript
+chat.onSlashCommand("/announce", async (event) => {
+  await event.channel.post(
+    `📢 Announcement from ${event.user.userName}: ${event.text}`
+  );
+});
+```
+
+### Ephemeral Response
+
+Visible only to the command invoker:
+
+```typescript
+chat.onSlashCommand("/secret", async (event) => {
+  await event.channel.postEphemeral(
+    event.user,
+    "This is just for you!",
+    { fallbackToDM: false }
+  );
+});
+```
+
+### Rich Card Response
+
+```typescript
+import { Card, Text, Actions, Button } from "chat";
+
+chat.onSlashCommand("/dashboard", async (event) => {
+  await event.channel.post(
+    <Card title="System Dashboard">
+      <Text>Status: All systems operational</Text>
+      <Actions>
+        <Button id="refresh" style="primary">Refresh</Button>
+        <LinkButton url="https://status.example.com" label="Details" />
+      </Actions>
+    </Card>
+  );
+});
+```
+
+## Opening Modals
+
+Trigger a form dialog from a slash command:
+
+```typescript
+import { Modal, TextInput, Select } from "chat";
+
+chat.onSlashCommand("/feedback", async (event) => {
+  await event.openModal(
+    <Modal callbackId="feedback_form" title="Submit Feedback">
+      <TextInput
+        id="message"
+        label="Your feedback"
+        placeholder="Tell us what you think..."
+        multiline
+      />
+      <Select
+        id="category"
+        label="Category"
+        options={[
+          { label: "Bug Report", value: "bug" },
+          { label: "Feature Request", value: "feature" },
+        ]}
+      />
+    </Modal>
+  );
+});
+
+chat.onModalSubmit("feedback_form", async (event) => {
+  await saveFeedback(event.values);
+  
+  if (event.relatedChannel) {
+    await event.relatedChannel.post("Thank you for your feedback!");
+  }
+});
+```
+
+## User Information
+
+Access information about the command invoker:
+
+```typescript
+chat.onSlashCommand("/whoami", async (event) => {
+  const { userId, userName, fullName, isBot } = event.user;
+  
+  await event.channel.postEphemeral(
+    event.user,
+    `User ID: ${userId}\nUsername: ${userName}\nFull Name: ${fullName}`,
+    { fallbackToDM: false }
+  );
+});
+```
+
+## Channel Context
+
+The `event.channel` provides access to the channel where the command was invoked:
+
+```typescript
+chat.onSlashCommand("/channel-info", async (event) => {
+  const info = await event.channel.fetchMetadata();
+  
+  await event.channel.post(
+    `Channel: ${info.name}\nMembers: ${info.memberCount}\nDM: ${info.isDM}`
+  );
+});
+```
+
+## Complete Example
+
+Task management commands:
+
+```typescript
+import { Chat, Card, Text, Fields, Field, Actions, Button, Modal, TextInput, Select } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+// Create a new task
+chat.onSlashCommand("/task", async (event) => {
+  await event.openModal(
+    <Modal callbackId="create_task" title="Create Task" submitLabel="Create">
+      <TextInput id="title" label="Task Title" maxLength={100} />
+      <TextInput id="description" label="Description" multiline optional />
+      <Select
+        id="priority"
+        label="Priority"
+        options={[
+          { label: "Low", value: "low" },
+          { label: "Medium", value: "medium" },
+          { label: "High", value: "high" },
+        ]}
+      />
+    </Modal>
+  );
+});
+
+chat.onModalSubmit("create_task", async (event) => {
+  const task = await createTask({
+    title: event.values.title,
+    description: event.values.description,
+    priority: event.values.priority,
+    createdBy: event.user.userId,
+  });
+  
+  if (event.relatedChannel) {
+    await event.relatedChannel.post(
+      <Card title="Task Created">
+        <Fields>
+          <Field label="ID" value={task.id} />
+          <Field label="Title" value={task.title} />
+          <Field label="Priority" value={task.priority} />
+        </Fields>
+        <Actions>
+          <Button id="view_task" value={task.id}>View Task</Button>
+        </Actions>
+      </Card>
+    );
+  }
+});
+
+// List tasks
+chat.onSlashCommand("/tasks", async (event) => {
+  const tasks = await getTasks();
+  
+  if (tasks.length === 0) {
+    await event.channel.postEphemeral(
+      event.user,
+      "No tasks found. Use /task to create one!",
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  await event.channel.post(
+    <Card title="Open Tasks">
+      <Table
+        headers={["ID", "Title", "Priority"]}
+        rows={tasks.map(t => [t.id, t.title, t.priority])}
+      />
+    </Card>
+  );
+});
+
+// Search tasks
+chat.onSlashCommand("/search-tasks", async (event) => {
+  const query = event.text;
+  
+  if (!query) {
+    await event.channel.postEphemeral(
+      event.user,
+      "Usage: /search-tasks <query>",
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  const results = await searchTasks(query);
+  
+  await event.channel.post(
+    `Found ${results.length} tasks matching "${query}"`
+  );
+});
+```
+
+## Platform Setup
+
+You need to register slash commands in each platform:
+
+### Slack
+
+1. Go to your Slack App settings
+2. Navigate to "Slash Commands"
+3. Click "Create New Command"
+4. Set Request URL to your webhook endpoint
+5. Add the command (e.g., `/help`)
+
+### Microsoft Teams
+
+1. Add to your app manifest:
+```json
+"commands": [
+  {
+    "id": "help",
+    "type": "query",
+    "title": "Help",
+    "description": "Show help information"
+  }
+]
+```
+
+### Google Chat
+
+Slash commands work as regular messages starting with `/`.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use ephemeral messages for private responses">
+    Error messages, help text, and user-specific data should be sent as ephemeral messages to avoid cluttering the channel.
+  </Accordion>
+  
+  <Accordion title="Validate arguments early">
+    Check for required arguments and provide clear usage instructions when they're missing.
+  </Accordion>
+  
+  <Accordion title="Provide feedback quickly">
+    Slash commands should respond within 3 seconds. For long operations, acknowledge immediately and update later.
+  </Accordion>
+  
+  <Accordion title="Use modals for complex inputs">
+    When you need multiple fields or structured data, open a modal instead of parsing complex command arguments.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Modals" icon="window-restore" href="/modals">
+    Create forms triggered by slash commands
+  </Card>
+  <Card title="Actions" icon="hand-pointer" href="/actions">
+    Add buttons to command responses
+  </Card>
+</CardGroup>

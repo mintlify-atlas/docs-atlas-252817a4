@@ -1,0 +1,422 @@
+---
+title: GitHub Adapter
+description: Respond to PR comments and review threads on GitHub
+---
+
+## Installation
+
+```bash
+npm install @chat-adapter/github
+```
+
+## Environment Variables
+
+<Note>
+  Create a GitHub App or use a Personal Access Token. GitHub Apps are recommended for team/organization bots.
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_TOKEN` | PAT mode | Personal Access Token with `repo` scope |
+| `GITHUB_APP_ID` | App mode | GitHub App ID |
+| `GITHUB_PRIVATE_KEY` | App mode | Private key (PEM format) |
+| `GITHUB_INSTALLATION_ID` | Single-tenant app | Installation ID for single org |
+| `GITHUB_WEBHOOK_SECRET` | Yes | Webhook secret for signature verification |
+| `GITHUB_BOT_USERNAME` | Optional | Bot username (e.g., `my-bot[bot]`) |
+
+## Configuration Options
+
+```typescript
+type GitHubAdapterConfig = 
+  | GitHubAdapterPATConfig
+  | GitHubAdapterAppConfig
+  | GitHubAdapterMultiTenantAppConfig;
+
+// Personal Access Token
+interface GitHubAdapterPATConfig {
+  token: string;
+  webhookSecret: string;
+  userName: string;
+  botUserId?: number;
+  logger: Logger;
+}
+
+// Single-tenant GitHub App
+interface GitHubAdapterAppConfig {
+  appId: string;
+  privateKey: string;
+  installationId: number;
+  webhookSecret: string;
+  userName: string;
+  botUserId?: number;
+  logger: Logger;
+}
+
+// Multi-tenant GitHub App
+interface GitHubAdapterMultiTenantAppConfig {
+  appId: string;
+  privateKey: string;
+  // No installationId - resolved per-repository from webhooks
+  webhookSecret: string;
+  userName: string;
+  botUserId?: number;
+  logger: Logger;
+}
+```
+
+## Setup
+
+<Tabs>
+  <Tab title="Personal Access Token">
+    For personal projects or testing:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createGitHubAdapter } from '@chat-adapter/github';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        github: createGitHubAdapter({
+          token: process.env.GITHUB_TOKEN!,
+          webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
+          userName: 'my-bot',
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+
+    <Warning>
+      PAT mode uses your personal account. GitHub Apps are recommended for organization bots.
+    </Warning>
+  </Tab>
+
+  <Tab title="Single-Tenant App">
+    For internal bots serving one organization:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createGitHubAdapter } from '@chat-adapter/github';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot[bot]',
+      adapters: {
+        github: createGitHubAdapter({
+          appId: process.env.GITHUB_APP_ID!,
+          privateKey: process.env.GITHUB_PRIVATE_KEY!,
+          installationId: parseInt(process.env.GITHUB_INSTALLATION_ID!),
+          webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
+          userName: 'my-bot[bot]',
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+  </Tab>
+
+  <Tab title="Multi-Tenant App">
+    For public apps installable by any organization:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createGitHubAdapter } from '@chat-adapter/github';
+    import { RedisState } from '@chat-adapter/state-redis';
+
+    const chat = new Chat({
+      userName: 'my-bot[bot]',
+      adapters: {
+        github: createGitHubAdapter({
+          appId: process.env.GITHUB_APP_ID!,
+          privateKey: process.env.GITHUB_PRIVATE_KEY!,
+          // No installationId - auto-detected from webhooks
+          webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
+          userName: 'my-bot[bot]',
+        }),
+      },
+      state: new RedisState({ url: process.env.REDIS_URL }),
+    });
+
+    await chat.initialize();
+    ```
+
+    <Note>
+      Multi-tenant mode requires a persistent StateAdapter to cache installation IDs.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Webhook Handler
+
+```typescript
+app.post('/webhooks/github', async (req, res) => {
+  const response = await github.handleWebhook(req, {
+    waitUntil: (promise) => {/* handle async work */},
+  });
+  res.status(response.status).send(await response.text());
+});
+```
+
+Configure webhook in your GitHub repository or app settings:
+- **Payload URL**: `https://your-app.com/webhooks/github`
+- **Content type**: `application/json`
+- **Secret**: Your webhook secret
+- **Events**: `Issue comments`, `Pull request review comments`
+
+## Features
+
+### Supported Events
+
+- `issue_comment` (created) - Comments on PR Conversation tab
+- `pull_request_review_comment` (created) - Line-specific comments on Files Changed tab
+
+### Thread Types
+
+GitHub adapter supports two thread types:
+
+**1. PR-level threads (Conversation tab)**
+```
+github:{owner}/{repo}:{prNumber}
+```
+All comments on the PR's main conversation.
+
+**2. Review comment threads (Files Changed tab)**
+```
+github:{owner}/{repo}:{prNumber}:rc:{reviewCommentId}
+```
+Line-specific discussion threads on code changes.
+
+### Posting Comments
+
+Post to PR conversation:
+
+```typescript
+// Thread ID: github:vercel/next.js:12345
+await thread.post('LGTM! Approving this PR.');
+```
+
+Reply to a review comment thread:
+
+```typescript
+// Thread ID: github:vercel/next.js:12345:rc:98765
+await thread.post('Fixed in the latest commit.');
+```
+
+### Markdown Support
+
+GitHub supports full GitHub Flavored Markdown:
+
+```typescript
+await thread.post(`
+## Code Review
+
+- [✓] Tests pass
+- [✓] No lint errors
+- [ ] Documentation updated
+
+```typescript
+const foo = 'bar';
+```
+`);
+```
+
+### Reactions
+
+Add/remove reactions to comments:
+
+```typescript
+// GitHub reaction types: +1, -1, laugh, confused, heart, hooray, rocket, eyes
+await thread.addReaction(messageId, { name: 'thumbs_up' });
+await thread.removeReaction(messageId, { name: 'thumbs_up' });
+```
+
+### Cards
+
+Cards are converted to GitHub Flavored Markdown tables:
+
+```typescript
+import { Card, Section, Button } from 'chat/cards';
+
+await thread.post(
+  <Card title="Build Status">
+    <Section text="Build #42 completed successfully" />
+    <Button actionId="deploy">Deploy</Button>
+  </Card>
+);
+// Renders as formatted markdown table
+```
+
+<Note>
+  GitHub doesn't support interactive components. Buttons are rendered as markdown links.
+</Note>
+
+## Thread IDs
+
+GitHub thread IDs encode repository and PR information:
+
+```
+github:{owner}/{repo}:{prNumber}[:rc:{commentId}]
+```
+
+Examples:
+- PR conversation: `github:vercel/next.js:12345`
+- Review thread: `github:vercel/next.js:12345:rc:98765`
+
+## Message History
+
+Fetch comments from a thread:
+
+```typescript
+const { messages } = await thread.fetchMessages({
+  limit: 100,
+  direction: 'backward',
+});
+```
+
+## Listing Threads
+
+List all open PRs (threads) in a repository:
+
+```typescript
+const { threads, nextCursor } = await github.listThreads(
+  'github:vercel/next.js',
+  { limit: 30 }
+);
+
+for (const thread of threads) {
+  console.log(thread.rootMessage.text); // PR title
+}
+```
+
+## Platform Limits
+
+- **Comment length**: 65,536 characters
+- **File size**: 25 MB per file in PR
+- **Rate limits**: 5,000 requests/hour (authenticated), 60 requests/hour (unauthenticated)
+
+See [GitHub rate limits](https://docs.github.com/en/rest/overview/resources-in-the-rest-api#rate-limiting) for details.
+
+## Code Examples
+
+<CodeGroup>
+  ```typescript PR Comment Handler
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.includes('/deploy')) {
+      await event.thread.post('Deploying to staging...');
+    }
+  });
+  ```
+
+  ```typescript Review Comment Handler
+  chat.onNewMessage(async (event) => {
+    // Check if this is a review comment thread
+    if (event.thread.id.includes(':rc:')) {
+      await event.thread.post('Thanks for the review!');
+    }
+  });
+  ```
+
+  ```typescript Reaction to Approval
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.toLowerCase().includes('lgtm')) {
+      await event.thread.addReaction(event.message.id, { name: 'rocket' });
+    }
+  });
+  ```
+
+  ```typescript Auto-Reply to Questions
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.includes('?')) {
+      await event.thread.post('Great question! Let me check...');
+    }
+  });
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook signature fails">
+    - Verify `GITHUB_WEBHOOK_SECRET` matches the secret in GitHub settings
+    - Ensure webhook Content-Type is `application/json`
+    - Check that request body is raw (not parsed)
+  </Accordion>
+
+  <Accordion title="Bot doesn't respond to comments">
+    - Enable "Issue comments" and "Pull request review comments" events
+    - Verify webhook URL is publicly accessible (HTTPS required)
+    - Check that app/PAT has `repo` scope
+  </Accordion>
+
+  <Accordion title="Multi-tenant mode not working">
+    - Use a persistent StateAdapter (Redis, not Memory)
+    - Ensure webhooks include `installation` field
+    - Check that installation IDs are being cached (debug logs)
+  </Accordion>
+
+  <Accordion title="Can't post to review threads">
+    - Use the correct thread ID format: `github:owner/repo:123:rc:456`
+    - Review comment ID is the ROOT comment, not the reply
+    - Ensure bot has write access to the repository
+  </Accordion>
+</AccordionGroup>
+
+## Required Permissions
+
+**GitHub App Permissions:**
+- **Pull requests**: Read & write (post comments, read PRs)
+- **Issues**: Read & write (for PR conversations)
+- **Metadata**: Read (repository metadata)
+
+**Personal Access Token Scopes:**
+- `repo` - Full repository access
+
+## Creating a GitHub App
+
+<Steps>
+  <Step title="Create app">
+    Go to [GitHub Developer Settings](https://github.com/settings/apps/new) and create a new GitHub App.
+  </Step>
+
+  <Step title="Configure permissions">
+    - **Pull requests**: Read & write
+    - **Issues**: Read & write
+    - **Metadata**: Read
+  </Step>
+
+  <Step title="Subscribe to events">
+    - Issue comments
+    - Pull request review comments
+  </Step>
+
+  <Step title="Generate private key">
+    Generate and download the private key PEM file.
+  </Step>
+
+  <Step title="Install app">
+    Install the app on your account or organization to get the installation ID.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Process comments and build review flows
+  </Card>
+  <Card title="GitHub Apps" icon="github" href="https://docs.github.com/en/developers/apps">
+    Learn about GitHub Apps
+  </Card>
+  <Card title="Code Review Bots" icon="robot" href="/guides/code-review">
+    Build automated code review assistants
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Persist data across PR comments
+  </Card>
+</CardGroup>

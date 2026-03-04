@@ -1,0 +1,479 @@
+---
+title: Thread Interface
+description: Represents a conversation thread with message posting and state management
+---
+
+The `Thread` interface represents a conversation thread where users exchange messages. It provides methods for posting messages, managing subscriptions, and storing per-thread state.
+
+## Properties
+
+### id
+
+```typescript
+readonly id: string
+```
+
+Unique thread ID. Format: `{adapter}:{channel}:{thread}`
+
+**Examples:**
+- Slack: `slack:C123ABC:1234567890.123456`
+- Teams: `teams:{base64(conversationId)}:{base64(serviceUrl)}`
+- Google Chat: `gchat:spaces/ABC123:{base64(threadName)}`
+
+### channelId
+
+```typescript
+readonly channelId: string
+```
+
+Channel/conversation ID containing this thread.
+
+### adapter
+
+```typescript
+readonly adapter: Adapter
+```
+
+The adapter this thread belongs to.
+
+### isDM
+
+```typescript
+readonly isDM: boolean
+```
+
+Whether this is a direct message conversation.
+
+### channel
+
+```typescript
+readonly channel: Channel<TState>
+```
+
+Get the Channel containing this thread. Lazy-created and cached.
+
+```typescript
+const channelName = await thread.channel.fetchMetadata();
+console.log(channelName.name);
+```
+
+### state
+
+```typescript
+readonly state: Promise<TState | null>
+```
+
+Get the current thread state. Returns null if no state has been set.
+
+```typescript
+interface MyState {
+  aiMode?: boolean;
+  userName?: string;
+}
+
+const state = await thread.state; // Type: MyState | null
+if (state?.aiMode) {
+  // AI mode is enabled
+}
+```
+
+### recentMessages
+
+```typescript
+recentMessages: Message[]
+```
+
+Recently fetched messages (cached). Updated by `refresh()`.
+
+### messages
+
+```typescript
+readonly messages: AsyncIterable<Message>
+```
+
+Iterate messages newest first (backward from most recent). Auto-paginates lazily.
+
+```typescript
+// Get the 10 most recent messages
+const recent: Message[] = [];
+for await (const msg of thread.messages) {
+  recent.push(msg);
+  if (recent.length >= 10) break;
+}
+```
+
+### allMessages
+
+```typescript
+readonly allMessages: AsyncIterable<Message>
+```
+
+Iterate ALL messages in chronological order (oldest first). Automatically handles pagination.
+
+```typescript
+// Process all messages from the beginning
+for await (const message of thread.allMessages) {
+  console.log(message.text);
+}
+```
+
+## Methods
+
+### post()
+
+```typescript
+post(
+  message: string | PostableMessage | CardJSXElement
+): Promise<SentMessage>
+```
+
+Post a message to this thread. Supports text, markdown, cards, and streaming from async iterables.
+
+<ParamField path="message" type="string | PostableMessage | CardJSXElement" required>
+  Message content to post
+
+  <Expandable title="PostableMessage types">
+    - `string` - Raw text
+    - `{ raw: string }` - Explicit raw text
+    - `{ markdown: string }` - Markdown text
+    - `{ ast: Root }` - mdast AST
+    - `{ card: CardElement }` - Rich card
+    - `CardElement` - Direct card element
+    - `AsyncIterable<string>` - Streaming text (e.g., from AI SDK)
+  </Expandable>
+</ParamField>
+
+<ResponseField name="sentMessage" type="SentMessage">
+  A SentMessage with methods to edit, delete, or add reactions
+</ResponseField>
+
+**Streaming Behavior:**
+When posting a stream (e.g., from AI SDK), uses platform-native streaming APIs when available (Slack), or falls back to post + edit with throttling.
+
+```typescript
+// Simple string
+await thread.post("Hello!");
+
+// Markdown
+await thread.post({ markdown: "**Bold** and _italic_" });
+
+// With emoji
+import { emoji } from "chat";
+await thread.post(`${emoji.thumbs_up} Great job!`);
+
+// JSX Card (with @jsxImportSource chat)
+await thread.post(
+  <Card title="Welcome!">
+    <Text>Hello world</Text>
+  </Card>
+);
+
+// Stream from AI SDK
+import { generateText } from "ai";
+const result = await generateText({ prompt: message.text });
+await thread.post(result.textStream);
+```
+
+### postEphemeral()
+
+```typescript
+postEphemeral(
+  user: string | Author,
+  message: AdapterPostableMessage | CardJSXElement,
+  options: PostEphemeralOptions
+): Promise<EphemeralMessage | null>
+```
+
+Post an ephemeral message visible only to a specific user.
+
+<ParamField path="user" type="string | Author" required>
+  User ID string or Author object (from message.author or event.user)
+</ParamField>
+
+<ParamField path="message" type="AdapterPostableMessage | CardJSXElement" required>
+  Message content (string, markdown, card, etc.). Streaming is NOT supported.
+</ParamField>
+
+<ParamField path="options" type="PostEphemeralOptions" required>
+  <Expandable title="properties">
+    <ParamField path="fallbackToDM" type="boolean" required>
+      If true, falls back to DM when native ephemeral is not supported. If false, returns null when unsupported.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="EphemeralMessage | null">
+  EphemeralMessage with `usedFallback: true` if DM was used, or null if native ephemeral not supported and fallbackToDM is false
+</ResponseField>
+
+**Platform Behavior:**
+- **Slack**: Native ephemeral (session-dependent, disappears on reload)
+- **Google Chat**: Native private message (persists, only target user sees it)
+- **Discord**: No native support - requires fallbackToDM: true
+- **Teams**: No native support - requires fallbackToDM: true
+
+```typescript
+// Always send (DM fallback on Discord/Teams)
+await thread.postEphemeral(
+  user, 
+  'Only you can see this!', 
+  { fallbackToDM: true }
+);
+
+// Only send if native ephemeral supported (Slack/GChat)
+const result = await thread.postEphemeral(
+  user, 
+  'Secret!', 
+  { fallbackToDM: false }
+);
+if (!result) {
+  // Platform doesn't support native ephemeral
+}
+```
+
+### setState()
+
+```typescript
+setState(
+  state: Partial<TState>,
+  options?: { replace?: boolean }
+): Promise<void>
+```
+
+Set the thread state. Merges with existing state by default.
+
+<ParamField path="state" type="Partial<TState>" required>
+  State object to set (will be merged with existing state unless replace: true)
+</ParamField>
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="replace" type="boolean" default="false">
+      If true, replace entire state instead of merging
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```typescript
+interface MyState {
+  aiMode?: boolean;
+  userName?: string;
+  count?: number;
+}
+
+// Merge with existing state
+await thread.setState({ aiMode: true });
+
+// Replace entire state
+await thread.setState({ userName: "Alice" }, { replace: true });
+```
+
+### subscribe()
+
+```typescript
+async subscribe(): Promise<void>
+```
+
+Subscribe to future messages in this thread. Once subscribed, all messages in this thread will trigger `onSubscribedMessage` handlers.
+
+<Note>
+The initial message that triggered subscription will NOT fire the handler. Only subsequent messages will.
+</Note>
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await thread.post("I'm now watching this thread!");
+});
+```
+
+### unsubscribe()
+
+```typescript
+async unsubscribe(): Promise<void>
+```
+
+Unsubscribe from this thread. Future messages will no longer trigger `onSubscribedMessage` handlers.
+
+```typescript
+await thread.unsubscribe();
+```
+
+### isSubscribed()
+
+```typescript
+async isSubscribed(): Promise<boolean>
+```
+
+Check if this thread is currently subscribed.
+
+<Note>
+In subscribed message handlers, this is optimized to return true immediately without a state lookup, since we already know we're in a subscribed context.
+</Note>
+
+```typescript
+if (await thread.isSubscribed()) {
+  console.log("Already subscribed");
+} else {
+  await thread.subscribe();
+}
+```
+
+### startTyping()
+
+```typescript
+async startTyping(status?: string): Promise<void>
+```
+
+Show typing indicator in the thread.
+
+<ParamField path="status" type="string">
+  Optional status text (e.g., "Typing...", "Searching documents...") shown where supported
+</ParamField>
+
+<Note>
+Some platforms support persistent typing indicators, others just send once. The optional status parameter is shown where supported.
+</Note>
+
+```typescript
+await thread.startTyping("Thinking...");
+// Perform long-running operation
+await thread.post("Here's the answer!");
+```
+
+### refresh()
+
+```typescript
+async refresh(): Promise<void>
+```
+
+Refresh `recentMessages` from the API. Fetches the latest 50 messages and updates the cache.
+
+```typescript
+await thread.refresh();
+const latest = thread.recentMessages[thread.recentMessages.length - 1];
+```
+
+### mentionUser()
+
+```typescript
+mentionUser(userId: string): string
+```
+
+Get a platform-specific mention string for a user. Use this to @-mention a user in a message.
+
+<ParamField path="userId" type="string" required>
+  Platform-specific user ID
+</ParamField>
+
+<ResponseField name="mention" type="string">
+  Formatted mention string (e.g., `<@U123>`)
+</ResponseField>
+
+```typescript
+const mention = thread.mentionUser(message.author.userId);
+await thread.post(`Hey ${mention}, check this out!`);
+```
+
+### createSentMessageFromMessage()
+
+```typescript
+createSentMessageFromMessage(
+  message: Message
+): SentMessage
+```
+
+Wrap a Message object as a SentMessage with edit/delete capabilities. Used internally for reconstructing messages from serialized data.
+
+<ParamField path="message" type="Message" required>
+  Message object to wrap
+</ParamField>
+
+<ResponseField name="sentMessage" type="SentMessage">
+  SentMessage with edit/delete/reaction methods
+</ResponseField>
+
+## Type Parameters
+
+<ParamField path="TState" type="object" default="Record<string, unknown>">
+  Custom state type stored per-thread
+</ParamField>
+
+<ParamField path="TRawMessage" type="unknown" default="unknown">
+  Platform-specific raw message type
+</ParamField>
+
+## Usage Examples
+
+### Basic Message Posting
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.post("Hello! How can I help?");
+});
+```
+
+### Streaming from AI
+
+```typescript
+import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+chat.onSubscribedMessage(async (thread, message) => {
+  const result = await generateText({
+    model: openai("gpt-4"),
+    prompt: message.text,
+  });
+  
+  // Stream the response
+  await thread.post(result.textStream);
+});
+```
+
+### Thread State Management
+
+```typescript
+interface ConversationState {
+  mode: "help" | "chat" | "search";
+  history: string[];
+}
+
+chat.onNewMention(async (thread, message) => {
+  await thread.setState({ 
+    mode: "chat", 
+    history: [message.text] 
+  });
+  await thread.subscribe();
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  const state = await thread.state;
+  const history = state?.history || [];
+  
+  // Update history
+  await thread.setState({ 
+    history: [...history, message.text] 
+  });
+});
+```
+
+### Message Iteration
+
+```typescript
+// Get recent messages for context
+const recentMessages: string[] = [];
+for await (const msg of thread.messages) {
+  recentMessages.push(msg.text);
+  if (recentMessages.length >= 5) break;
+}
+
+const context = recentMessages.reverse().join("\n");
+```
+
+## See Also
+
+- [Chat API](/api/chat) - Main Chat class
+- [Channel API](/api/channel) - Channel interface
+- [Message API](/api/message) - Message structure
+- [State Management](/core/state) - Thread state details
+- [Formatting](/core/formatting) - Markdown and rich formatting

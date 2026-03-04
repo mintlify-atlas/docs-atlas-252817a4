@@ -1,0 +1,292 @@
+---
+title: Direct Messages
+description: Send private direct messages to users across Slack, Teams, and Google Chat
+---
+
+# Direct Messages
+
+The Chat SDK provides a unified API for opening direct message conversations and sending private messages to users.
+
+## Opening a DM
+
+Open a direct message conversation with a user:
+
+```typescript
+const dmThreadId = await adapter.openDM(userId);
+
+// Post to the DM
+const thread = chat.thread(dmThreadId);
+await thread.post("Hello! This is a private message.");
+```
+
+## Adapter Interface
+
+The `openDM` method is available on adapters:
+
+```typescript
+interface Adapter {
+  /**
+   * Open a direct message conversation with a user.
+   *
+   * @param userId - The platform-specific user ID
+   * @returns The thread ID for the DM conversation
+   */
+  openDM?(userId: string): Promise<string>;
+}
+```
+
+## Example: DM from Button Click
+
+Send a DM when a user clicks a button:
+
+```typescript
+import { Chat, Card, Text, Actions, Button } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+chat.onAction("send_dm", async (event) => {
+  // Open DM with the user who clicked
+  const dmThreadId = await event.adapter.openDM(event.user.userId);
+  const dmThread = chat.thread(dmThreadId);
+  
+  await dmThread.post(
+    <Card title="Private Message">
+      <Text>This is just for you, {event.user.fullName}!</Text>
+    </Card>
+  );
+  
+  // Confirm in the original thread
+  await event.thread.post("Check your DMs!");
+});
+```
+
+## Example: DM from Mention
+
+Send a DM when mentioned:
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  // Open DM with the user who mentioned the bot
+  const dmThreadId = await thread.adapter.openDM(message.author.userId);
+  const dmThread = chat.thread(dmThreadId);
+  
+  await dmThread.post(
+    "Thanks for mentioning me! How can I help?"
+  );
+});
+```
+
+## Checking if Thread is a DM
+
+Determine if a thread is a direct message:
+
+```typescript
+interface Thread {
+  readonly isDM: boolean;
+}
+
+// In a handler
+chat.onNewMention(async (thread, message) => {
+  if (thread.isDM) {
+    await thread.post("This is a private conversation.");
+  } else {
+    await thread.post("This is a public channel.");
+  }
+});
+```
+
+## Adapter Support
+
+Check if an adapter supports DMs:
+
+```typescript
+if (adapter.openDM) {
+  // Adapter supports opening DMs
+  const dmThreadId = await adapter.openDM(userId);
+} else {
+  // Adapter doesn't support DMs
+  console.log("This platform doesn't support opening DMs");
+}
+```
+
+## Thread ID Format
+
+DM thread IDs follow the same format as regular threads:
+
+- **Slack**: `slack:D123ABC:1234567890.123456` (D-prefix for DMs)
+- **Teams**: `teams:{base64(conversationId)}:{base64(serviceUrl)}`
+- **Google Chat**: `gchat:spaces/AAAA_BBB:{base64(threadName)}`
+
+## Platform-Specific User IDs
+
+Each platform has different user ID formats:
+
+### Slack
+
+Slack user IDs start with `U` followed by uppercase alphanumeric characters:
+
+```typescript
+const userId = "U123ABC456";
+await slackAdapter.openDM(userId);
+```
+
+Extract user ID from mentions:
+
+```typescript
+chat.onNewMessage(/@(U[A-Z0-9]+)/, async (thread, message) => {
+  const match = message.text.match(/@(U[A-Z0-9]+)/);
+  if (match) {
+    const mentionedUserId = match[1];
+    const dmThreadId = await thread.adapter.openDM(mentionedUserId);
+    // ...
+  }
+});
+```
+
+### Microsoft Teams
+
+Teams user IDs are Azure AD object IDs:
+
+```typescript
+const userId = "29:1AbcDefGhIjKlMnOpQrStUvWxYz";
+await teamsAdapter.openDM(userId);
+```
+
+### Google Chat
+
+Google Chat user IDs are in the format `users/{user}`:
+
+```typescript
+const userId = "users/123456789012345678901";
+await gchatAdapter.openDM(userId);
+```
+
+## User ID from Message Author
+
+Get the user ID from a message author:
+
+```typescript
+interface Author {
+  userId: string;    // Platform-specific user ID
+  userName: string;  // Username/handle
+  fullName: string;  // Display name
+  isBot: boolean | "unknown";
+  isMe: boolean;     // Whether this is the bot itself
+}
+
+chat.onNewMention(async (thread, message) => {
+  const userId = message.author.userId;
+  const dmThreadId = await thread.adapter.openDM(userId);
+  // ...
+});
+```
+
+## Complete Example: Onboarding DM
+
+Send an onboarding message via DM when a user joins:
+
+```typescript
+import { Chat, Card, Text, Fields, Field, Actions, LinkButton, emoji } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+chat.onMemberJoinedChannel(async (event) => {
+  const userId = event.user.userId;
+  
+  // Open DM with the new member
+  const dmThreadId = await event.adapter.openDM(userId);
+  const dmThread = chat.thread(dmThreadId);
+  
+  await dmThread.post(
+    <Card title={`${emoji.wave} Welcome to the team!`}>
+      <Text>
+        Hi {event.user.fullName}, welcome! Here's what you need to know:
+      </Text>
+      
+      <Fields>
+        <Field label="Team Size" value="42 members" />
+        <Field label="Channels" value="#general, #dev, #random" />
+        <Field label="Time Zone" value="PST (UTC-8)" />
+      </Fields>
+      
+      <Text style="bold">Quick Start:</Text>
+      <Text>
+        • Read our handbook\n
+        • Introduce yourself in #general\n
+        • Join your team channels
+      </Text>
+      
+      <Actions>
+        <LinkButton 
+          url="https://handbook.example.com" 
+          label="View Handbook"
+          style="primary"
+        />
+        <LinkButton 
+          url="https://example.com/slack-guide" 
+          label="Slack Guide"
+        />
+      </Actions>
+    </Card>
+  );
+});
+```
+
+## Error Handling
+
+Handle cases where DM opening fails:
+
+```typescript
+try {
+  const dmThreadId = await adapter.openDM(userId);
+  const dmThread = chat.thread(dmThreadId);
+  await dmThread.post("Hello!");
+} catch (error) {
+  console.error("Failed to open DM:", error);
+  // Fall back to posting in the original thread
+  await thread.post(
+    `@${userName} I couldn't send you a DM. Please check your privacy settings.`
+  );
+}
+```
+
+## DM Privacy Settings
+
+Some platforms allow users to restrict who can send them DMs:
+
+- **Slack**: Users can restrict DMs in workspace settings
+- **Teams**: Users can block external messages
+- **Google Chat**: Users can control who can message them
+
+Always handle DM failures gracefully and provide alternative communication methods.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Ask for consent before DMing">
+    Don't send unsolicited DMs. Provide a button or command that users can trigger to receive private messages.
+  </Accordion>
+  
+  <Accordion title="Keep DMs concise">
+    Direct messages feel more personal than channel messages. Keep them brief and relevant.
+  </Accordion>
+  
+  <Accordion title="Provide context in DMs">
+    Since DMs are separate from channel context, include enough information so the user understands why they received the message.
+  </Accordion>
+  
+  <Accordion title="Respect privacy settings">
+    Handle DM failures gracefully and don't repeatedly attempt to message users who have blocked DMs.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Ephemeral Messages" icon="eye-slash" href="/ephemeral-messages">
+    Send temporary messages visible to specific users
+  </Card>
+  <Card title="Actions" icon="hand-pointer" href="/actions">
+    Trigger DMs from button clicks
+  </Card>
+</CardGroup>

@@ -1,0 +1,378 @@
+---
+title: Discord Adapter
+description: Create Discord bots using HTTP Interactions or Gateway WebSocket
+---
+
+## Installation
+
+```bash
+npm install @chat-adapter/discord
+```
+
+## Environment Variables
+
+<Note>
+  Create a Discord app at the [Discord Developer Portal](https://discord.com/developers/applications).
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DISCORD_BOT_TOKEN` | Yes | Bot token from Discord Developer Portal |
+| `DISCORD_PUBLIC_KEY` | Yes | Public key for webhook signature verification |
+| `DISCORD_APPLICATION_ID` | Yes | Application ID (also the bot's user ID) |
+| `DISCORD_MENTION_ROLE_IDS` | Optional | Comma-separated role IDs to treat as mentions |
+
+## Configuration Options
+
+```typescript
+interface DiscordAdapterConfig {
+  /** Bot token */
+  botToken: string;
+  /** Public key for Ed25519 signature verification */
+  publicKey: string;
+  /** Application ID (bot user ID) */
+  applicationId: string;
+  /** Role IDs that trigger mention events (e.g., @moderators) */
+  mentionRoleIds?: string[];
+  /** Logger instance */
+  logger: Logger;
+  /** Override bot username */
+  userName?: string;
+}
+```
+
+## Setup
+
+```typescript
+import { Chat } from 'chat';
+import { createDiscordAdapter } from '@chat-adapter/discord';
+import { MemoryState } from '@chat-adapter/state-memory';
+
+const chat = new Chat({
+  userName: 'my-bot',
+  adapters: {
+    discord: createDiscordAdapter({
+      botToken: process.env.DISCORD_BOT_TOKEN!,
+      publicKey: process.env.DISCORD_PUBLIC_KEY!,
+      applicationId: process.env.DISCORD_APPLICATION_ID!,
+    }),
+  },
+  state: new MemoryState(),
+});
+
+await chat.initialize();
+```
+
+## Webhook Handler (HTTP Interactions)
+
+<Note>
+  Discord HTTP Interactions are recommended for serverless environments. Set your Interactions Endpoint URL in the Discord Developer Portal.
+</Note>
+
+```typescript
+app.post('/webhooks/discord', async (req, res) => {
+  const response = await discord.handleWebhook(req, {
+    waitUntil: (promise) => {/* handle async work */},
+  });
+  res.status(response.status).send(await response.text());
+});
+```
+
+## Gateway Mode (WebSocket)
+
+For receiving all messages (not just interactions):
+
+```typescript
+// Start Gateway listener (keeps WebSocket connection alive)
+await discord.startGatewayListener(
+  { waitUntil: (p) => {/* keep alive */} },
+  180000, // Duration in ms (3 minutes)
+  undefined, // AbortSignal (optional)
+  'https://your-app.com/webhooks/discord' // Forward events to webhook
+);
+```
+
+<Warning>
+  Gateway mode requires a persistent connection. Not recommended for serverless platforms unless using a worker process.
+</Warning>
+
+### Gateway Event Forwarding
+
+Forward Gateway events to your webhook endpoint:
+
+```typescript
+// The Gateway listener forwards events like:
+// - GATEWAY_MESSAGE_CREATE
+// - GATEWAY_MESSAGE_REACTION_ADD
+// - GATEWAY_MESSAGE_REACTION_REMOVE
+
+// Your webhook handler processes both HTTP Interactions and forwarded Gateway events
+app.post('/webhooks/discord', async (req, res) => {
+  // Automatically detects interaction type vs. forwarded Gateway event
+  const response = await discord.handleWebhook(req);
+  res.status(response.status).send(await response.text());
+});
+```
+
+## Features
+
+### Supported Events
+
+**HTTP Interactions:**
+- `PING` - Discord verification (auto-handled)
+- `APPLICATION_COMMAND` - Slash commands
+- `MESSAGE_COMPONENT` - Button clicks
+
+**Gateway Events (when using `startGatewayListener`):**
+- `MESSAGE_CREATE` - All messages in channels/DMs
+- `MESSAGE_REACTION_ADD` - Reaction added
+- `MESSAGE_REACTION_REMOVE` - Reaction removed
+
+### Slash Commands
+
+Register slash commands via Discord Developer Portal, then handle them:
+
+```typescript
+chat.onSlashCommand('/deploy', async (event) => {
+  await event.channel.post(`Deploying ${event.text}...`);
+});
+```
+
+### Buttons & Components
+
+Create messages with buttons:
+
+```typescript
+import { Card, Section, Button } from 'chat/cards';
+
+await thread.post(
+  <Card title="Moderation Action">
+    <Section text="User reported for spam" />
+    <Button actionId="ban_user" style="danger">Ban User</Button>
+    <Button actionId="warn_user">Warn</Button>
+    <Button actionId="dismiss">Dismiss</Button>
+  </Card>
+);
+```
+
+Handle button clicks:
+
+```typescript
+chat.onAction('ban_user', async (event) => {
+  await event.thread.post('User has been banned.');
+});
+```
+
+### Embeds
+
+Cards are converted to Discord embeds:
+
+```typescript
+import { Card, Section } from 'chat/cards';
+
+await thread.post(
+  <Card title="Build Status" style="primary">
+    <Section text="Build #42 completed successfully" />
+  </Card>
+);
+```
+
+### Reactions
+
+Add/remove emoji reactions:
+
+```typescript
+// Unicode emoji
+await thread.addReaction(messageId, '👍');
+await thread.removeReaction(messageId, '👍');
+
+// Custom emoji (must be from the same server)
+await thread.addReaction(messageId, { name: 'custom_emoji', id: '123456789' });
+```
+
+### File Uploads
+
+Send files with messages:
+
+```typescript
+import { readFileSync } from 'fs';
+
+await thread.post({
+  text: 'Server logs',
+  files: [{
+    filename: 'server.log',
+    data: readFileSync('./server.log'),
+    mimeType: 'text/plain',
+  }],
+});
+```
+
+<Note>
+  Discord supports up to 10 files per message, max 25 MB total (50 MB with Nitro).
+</Note>
+
+### Threads
+
+Discord threads are automatically detected:
+
+```typescript
+// When a message is in a thread, the adapter encodes:
+// discord:{guildId}:{parentChannelId}:{threadId}
+
+// When mentioned in a channel (not in a thread), a new thread is auto-created
+```
+
+## Thread IDs
+
+Discord thread IDs encode guild, channel, and thread:
+
+```
+discord:{guildId}:{channelId}:{threadId}
+```
+
+Examples:
+- DM: `discord:@me:987654321`
+- Channel: `discord:123456789:987654321`
+- Thread: `discord:123456789:987654321:111222333`
+
+## Opening DMs
+
+Create a DM channel with a user:
+
+```typescript
+const dmThreadId = await discord.openDM(userId);
+await chat.getThread(dmThreadId).post('Hello!');
+```
+
+## Message History
+
+Fetch message history from a channel or thread:
+
+```typescript
+const { messages, nextCursor } = await thread.fetchMessages({
+  limit: 50,
+  direction: 'backward',
+  cursor: previousCursor, // Optional for pagination
+});
+```
+
+## Platform Limits
+
+- **Message length**: 2,000 characters
+- **Embed description**: 4,096 characters
+- **Embeds per message**: 10 embeds
+- **Files per message**: 10 files (25 MB total, 50 MB with Nitro)
+- **Rate limits**: Varies by endpoint, typically 5 requests/5 seconds per route
+
+See [Discord rate limits](https://discord.com/developers/docs/topics/rate-limits) for details.
+
+## Code Examples
+
+<CodeGroup>
+  ```typescript Mention Handler (Gateway)
+  chat.onNewMention(async (event) => {
+    await event.thread.post(`Hey ${event.message.author.userName}!`);
+  });
+  ```
+
+  ```typescript Slash Command
+  chat.onSlashCommand('/status', async (event) => {
+    await event.channel.post('All systems operational!');
+  });
+  ```
+
+  ```typescript Button Action
+  chat.onAction('approve', async (event) => {
+    await event.thread.post('✅ Approved!');
+  });
+  ```
+
+  ```typescript Embed with Buttons
+  import { Card, Section, Button } from 'chat/cards';
+
+  await thread.post(
+    <Card title="Poll: Favorite Language?" style="primary">
+      <Section text="Vote for your favorite programming language" />
+      <Button actionId="vote_js">JavaScript</Button>
+      <Button actionId="vote_ts">TypeScript</Button>
+      <Button actionId="vote_py">Python</Button>
+    </Card>
+  );
+  ```
+
+  ```typescript Reaction Handler (Gateway)
+  chat.onReaction(async (event) => {
+    if (event.emoji.name === '⭐' && event.added) {
+      await event.thread.post('Thanks for the star!');
+    }
+  });
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook verification fails (401)">
+    - Verify `DISCORD_PUBLIC_KEY` matches the Public Key in Developer Portal
+    - Ensure public key is lowercase hex (64 characters)
+    - Check that signature headers are present: `x-signature-ed25519`, `x-signature-timestamp`
+  </Accordion>
+
+  <Accordion title="Bot doesn't respond to messages">
+    - HTTP Interactions only work for slash commands and buttons
+    - Use Gateway mode (`startGatewayListener`) to receive all messages
+    - Ensure bot has `MESSAGE CONTENT` intent enabled in Developer Portal
+  </Accordion>
+
+  <Accordion title="Slash commands not showing">
+    - Register commands via Discord Developer Portal or REST API
+    - Commands can take up to 1 hour to sync globally
+    - Use guild-specific commands for instant updates during development
+  </Accordion>
+
+  <Accordion title="Gateway listener disconnects">
+    - Gateway connections require persistent runtime (not serverless)
+    - Use AbortSignal to gracefully stop when deploying new version
+    - Forward Gateway events to webhook for serverless processing
+  </Accordion>
+</AccordionGroup>
+
+## Required Intents & Scopes
+
+**Bot Permissions:**
+- `VIEW_CHANNEL` - See channels
+- `SEND_MESSAGES` - Send messages
+- `EMBED_LINKS` - Send embeds
+- `ATTACH_FILES` - Upload files
+- `ADD_REACTIONS` - Add reactions
+- `READ_MESSAGE_HISTORY` - Fetch message history
+- `USE_SLASH_COMMANDS` - Respond to slash commands
+
+**Gateway Intents (for Gateway mode):**
+- `GUILDS` - Basic guild info
+- `GUILD_MESSAGES` - Receive messages
+- `MESSAGE_CONTENT` - Read message content (privileged)
+- `DIRECT_MESSAGES` - Receive DMs
+- `GUILD_MESSAGE_REACTIONS` - Receive reactions
+- `DIRECT_MESSAGE_REACTIONS` - Receive DM reactions
+
+<Warning>
+  `MESSAGE_CONTENT` is a privileged intent. Request it in the Developer Portal (required for verified bots).
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Process messages and build conversation flows
+  </Card>
+  <Card title="Embeds & Components" icon="sparkles" href="/features/cards">
+    Create rich embeds with buttons
+  </Card>
+  <Card title="Discord Developer Docs" icon="discord" href="https://discord.com/developers/docs">
+    Learn about Discord's Bot API
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Persist data across requests
+  </Card>
+</CardGroup>

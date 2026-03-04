@@ -1,0 +1,612 @@
+---
+title: ioredis State Adapter
+description: Production state adapter with Redis Cluster and Sentinel support
+---
+
+The ioredis state adapter provides persistent subscriptions and distributed locking using the [ioredis](https://www.npmjs.com/package/ioredis) package. Use this adapter when you need Redis Cluster, Sentinel, or want to reuse an existing ioredis client.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @chat-adapter/state-ioredis
+```
+
+```bash pnpm
+pnpm add @chat-adapter/state-ioredis
+```
+
+```bash yarn
+yarn add @chat-adapter/state-ioredis
+```
+</CodeGroup>
+
+## Basic Setup
+
+<CodeGroup>
+```typescript URL Connection
+import { Chat } from 'chat';
+import { createIoRedisState } from '@chat-adapter/state-ioredis';
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state: createIoRedisState({
+    url: process.env.REDIS_URL,
+  }),
+});
+```
+
+```typescript Existing Client
+import { Chat } from 'chat';
+import { createIoRedisState } from '@chat-adapter/state-ioredis';
+import Redis from 'ioredis';
+
+// Reuse existing ioredis client
+const client = new Redis(process.env.REDIS_URL);
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state: createIoRedisState({ client }),
+});
+```
+</CodeGroup>
+
+## Configuration
+
+### createIoRedisState(options)
+
+Creates an ioredis state adapter instance.
+
+```typescript
+export interface IoRedisStateAdapterOptions {
+  /** Redis connection URL (e.g., redis://localhost:6379) */
+  url: string;
+  /** Key prefix for all Redis keys (default: "chat-sdk") */
+  keyPrefix?: string;
+  /** Logger instance for error reporting */
+  logger?: Logger;
+}
+
+export interface IoRedisStateClientOptions {
+  /** Existing ioredis client instance */
+  client: Redis;
+  /** Key prefix for all Redis keys (default: "chat-sdk") */
+  keyPrefix?: string;
+  /** Logger instance for error reporting */
+  logger?: Logger;
+}
+```
+
+#### url
+
+Redis connection URL in format:
+
+```
+redis://[[username][:password]@][host][:port][/db-number]
+```
+
+<CodeGroup>
+```typescript Simple Connection
+const state = createIoRedisState({
+  url: 'redis://localhost:6379',
+});
+```
+
+```typescript With Authentication
+const state = createIoRedisState({
+  url: 'redis://:mypassword@localhost:6379',
+});
+```
+
+```typescript TLS Connection
+const state = createIoRedisState({
+  url: 'rediss://redis.example.com:6380', // Note the 's' in rediss
+});
+```
+</CodeGroup>
+
+#### client
+
+Pass an existing ioredis client for advanced configurations:
+
+```typescript
+import Redis from 'ioredis';
+
+const client = new Redis({
+  host: 'localhost',
+  port: 6379,
+  password: 'mypassword',
+  db: 0,
+  retryStrategy(times) {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  },
+});
+
+const state = createIoRedisState({ client });
+```
+
+<Note>
+When providing your own `client`, the adapter will NOT call `quit()` on disconnect. You're responsible for client lifecycle management.
+</Note>
+
+#### keyPrefix
+
+Optional prefix for all Redis keys:
+
+```typescript
+const state = createIoRedisState({
+  url: process.env.REDIS_URL,
+  keyPrefix: 'chatbot-prod', // default: "chat-sdk"
+});
+```
+
+#### logger
+
+Optional logger for error reporting:
+
+```typescript
+import { ConsoleLogger } from 'chat';
+
+const state = createIoRedisState({
+  url: process.env.REDIS_URL,
+  logger: new ConsoleLogger('debug').child('ioredis'),
+});
+```
+
+## Redis Cluster
+
+For high-availability Redis Cluster deployments:
+
+```typescript
+import Redis from 'ioredis';
+import { createIoRedisState } from '@chat-adapter/state-ioredis';
+
+const cluster = new Redis.Cluster([
+  { host: 'redis-1.example.com', port: 6379 },
+  { host: 'redis-2.example.com', port: 6379 },
+  { host: 'redis-3.example.com', port: 6379 },
+], {
+  redisOptions: {
+    password: process.env.REDIS_PASSWORD,
+  },
+});
+
+const state = createIoRedisState({ client: cluster });
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state,
+});
+```
+
+## Redis Sentinel
+
+For Redis Sentinel (automatic failover):
+
+```typescript
+import Redis from 'ioredis';
+import { createIoRedisState } from '@chat-adapter/state-ioredis';
+
+const sentinel = new Redis({
+  sentinels: [
+    { host: 'sentinel-1', port: 26379 },
+    { host: 'sentinel-2', port: 26379 },
+    { host: 'sentinel-3', port: 26379 },
+  ],
+  name: 'mymaster',
+  password: process.env.REDIS_PASSWORD,
+});
+
+const state = createIoRedisState({ client: sentinel });
+```
+
+## Redis Key Structure
+
+Identical to the Redis adapter:
+
+| Type | Pattern | Example | Description |
+|------|---------|---------|-------------|
+| Subscriptions | `{prefix}:subscriptions` | `chat-sdk:subscriptions` | Set of subscribed thread IDs |
+| Locks | `{prefix}:lock:{threadId}` | `chat-sdk:lock:slack:C123:1234567890.123` | String (lock token) with TTL |
+| Cache | `{prefix}:cache:{key}` | `chat-sdk:cache:user:123:prefs` | JSON string with optional TTL |
+
+### Inspecting Keys
+
+```bash
+# View all subscribed threads
+SMEMBERS chat-sdk:subscriptions
+
+# Check lock status
+GET chat-sdk:lock:slack:C123:1234567890.123
+TTL chat-sdk:lock:slack:C123:1234567890.123
+
+# View cache
+GET chat-sdk:cache:user:123:preferences
+```
+
+## Connection Management
+
+ioredis automatically connects on instantiation. The adapter tracks connection state internally.
+
+```typescript
+const state = createIoRedisState({ url: process.env.REDIS_URL });
+await state.connect(); // Waits for 'ready' event
+
+// Use state...
+
+await state.disconnect(); // Calls quit() if adapter owns client
+```
+
+### Connection Events
+
+The adapter listens for ioredis events:
+
+```typescript
+import Redis from 'ioredis';
+
+const client = new Redis(process.env.REDIS_URL);
+
+client.on('connect', () => console.log('Connected to Redis'));
+client.on('ready', () => console.log('Redis ready'));
+client.on('error', (err) => console.error('Redis error:', err));
+client.on('close', () => console.log('Redis connection closed'));
+client.on('reconnecting', () => console.log('Reconnecting...'));
+
+const state = createIoRedisState({ client });
+```
+
+<Note>
+ioredis automatically reconnects on network failures. Your bot will resume operation once Redis is reachable.
+</Note>
+
+## Thread Subscriptions
+
+Subscriptions are stored in a Redis Set:
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe(); // SADD chat-sdk:subscriptions {threadId}
+  await thread.post('Watching this thread!');
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  // Triggered when: SISMEMBER chat-sdk:subscriptions {threadId} == 1
+  await thread.post(`Got: ${message.text}`);
+});
+```
+
+## Distributed Locking
+
+Locks use atomic `SET NX PX` operations:
+
+```typescript
+// Internal to Chat SDK
+const lock = await state.acquireLock(threadId, 30000);
+if (!lock) {
+  // Another instance is processing this thread
+  return;
+}
+
+try {
+  await processMessage(thread, message);
+} finally {
+  await state.releaseLock(lock);
+}
+```
+
+### Lock Token Format
+
+```typescript
+// Example lock token
+"ioredis_1678901234567_a1b2c3d4e5"
+//        ^ timestamp    ^ random
+```
+
+### Extending Locks
+
+For operations exceeding the initial TTL:
+
+```typescript
+const lock = await state.acquireLock(threadId, 30000);
+if (!lock) return;
+
+try {
+  const interval = setInterval(async () => {
+    const extended = await state.extendLock(lock, 30000);
+    if (!extended) {
+      clearInterval(interval);
+      throw new Error('Lost lock');
+    }
+  }, 10000);
+
+  await longRunningTask();
+  clearInterval(interval);
+} finally {
+  await state.releaseLock(lock);
+}
+```
+
+## Caching
+
+Store JSON-serialized values with optional TTL:
+
+```typescript
+const state = chat.getState();
+
+// Store with 5-minute TTL
+await state.set('rate-limit:user:123', { count: 5 }, 5 * 60 * 1000);
+
+// Retrieve
+const limit = await state.get<{ count: number }>('rate-limit:user:123');
+if (limit && limit.count >= 10) {
+  await thread.post('Rate limit exceeded!');
+  return;
+}
+
+// Delete
+await state.delete('rate-limit:user:123');
+```
+
+## Advanced Usage
+
+### Accessing the ioredis Client
+
+```typescript
+import { IoRedisStateAdapter } from '@chat-adapter/state-ioredis';
+
+const state = createIoRedisState({ url: process.env.REDIS_URL });
+await state.connect();
+
+const client = (state as IoRedisStateAdapter).getClient();
+
+// Use ioredis commands directly
+await client.incr('custom:counter');
+await client.expire('custom:counter', 3600);
+
+const pipeline = client.pipeline();
+pipeline.set('key1', 'value1');
+pipeline.set('key2', 'value2');
+await pipeline.exec();
+```
+
+### Custom Retry Strategy
+
+```typescript
+import Redis from 'ioredis';
+
+const client = new Redis({
+  host: 'localhost',
+  port: 6379,
+  retryStrategy(times) {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  },
+  maxRetriesPerRequest: 3,
+});
+
+const state = createIoRedisState({ client });
+```
+
+### Connection Pooling
+
+```typescript
+import Redis from 'ioredis';
+
+// Create multiple connections for high-throughput scenarios
+const clients = Array.from({ length: 5 }, () => new Redis(process.env.REDIS_URL));
+
+let clientIndex = 0;
+function getClient() {
+  const client = clients[clientIndex];
+  clientIndex = (clientIndex + 1) % clients.length;
+  return client;
+}
+
+const state = createIoRedisState({ client: getClient() });
+```
+
+## Deployment Examples
+
+<CodeGroup>
+```typescript AWS ElastiCache Cluster
+import Redis from 'ioredis';
+import { createIoRedisState } from '@chat-adapter/state-ioredis';
+
+const cluster = new Redis.Cluster([
+  { host: process.env.ELASTICACHE_ENDPOINT, port: 6379 },
+], {
+  dnsLookup: (address, callback) => callback(null, address),
+  redisOptions: {
+    tls: {},
+    password: process.env.REDIS_PASSWORD,
+  },
+});
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state: createIoRedisState({ client: cluster }),
+});
+```
+
+```typescript Google Cloud Memorystore
+import Redis from 'ioredis';
+import { createIoRedisState } from '@chat-adapter/state-ioredis';
+
+const client = new Redis({
+  host: process.env.MEMORYSTORE_HOST,
+  port: 6379,
+  family: 4, // IPv4
+});
+
+const state = createIoRedisState({ client });
+```
+
+```typescript Azure Cache for Redis
+import Redis from 'ioredis';
+
+const client = new Redis({
+  host: process.env.AZURE_REDIS_HOST,
+  port: 6380,
+  password: process.env.AZURE_REDIS_KEY,
+  tls: { servername: process.env.AZURE_REDIS_HOST },
+});
+
+const state = createIoRedisState({ client });
+```
+</CodeGroup>
+
+## Monitoring
+
+### Connection Health
+
+```typescript
+import type { IoRedisStateAdapter } from '@chat-adapter/state-ioredis';
+
+const state = createIoRedisState({ url: process.env.REDIS_URL });
+const client = (state as IoRedisStateAdapter).getClient();
+
+const isHealthy = client.status === 'ready';
+console.log(`Redis status: ${client.status}`);
+// Possible values: 'wait', 'connecting', 'connect', 'ready', 'close', 'end'
+```
+
+### Metrics
+
+```typescript
+// Subscription count
+const count = await client.scard('chat-sdk:subscriptions');
+
+// Active locks
+const locks = await client.keys('chat-sdk:lock:*');
+
+// Memory usage
+const info = await client.info('memory');
+console.log(info);
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection timeout">
+    ioredis is failing to connect to Redis.
+
+    **Solution:**
+    - Check `REDIS_URL` is correct
+    - Verify network access (security groups, firewalls)
+    - Ensure Redis is running: `redis-cli ping`
+    - Check logs for connection errors
+  </Accordion>
+
+  <Accordion title="READONLY error in Cluster mode">
+    You're writing to a read replica in Redis Cluster.
+
+    **Solution:**
+    Configure cluster with `scaleReads`:
+    ```typescript
+    new Redis.Cluster([...], {
+      scaleReads: 'master', // Always write to master
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Client not disconnecting">
+    When providing your own `client`, the adapter doesn't call `quit()` on disconnect.
+
+    **Solution:**
+    Manually disconnect:
+    ```typescript
+    await state.disconnect();
+    await client.quit();
+    ```
+  </Accordion>
+
+  <Accordion title="Locks not releasing">
+    Locks expire automatically via TTL, but graceful release is better.
+
+    **Solution:**
+    Always use try/finally:
+    ```typescript
+    const lock = await state.acquireLock(threadId, 30000);
+    if (!lock) return;
+    try {
+      // ...
+    } finally {
+      await state.releaseLock(lock);
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## redis vs ioredis
+
+| Feature | `@chat-adapter/state-redis` | `@chat-adapter/state-ioredis` |
+|---------|---------------------------|-----------------------------|
+| Package | Official `redis` package | Community `ioredis` package |
+| Setup | Simple connection string | Supports advanced configs |
+| Cluster | No | Yes |
+| Sentinel | No | Yes |
+| Client reuse | No | Yes |
+| Auto-reconnect | Yes | Yes |
+| Performance | Similar | Similar |
+| **Use when** | Single Redis instance | Cluster, Sentinel, or existing ioredis setup |
+
+<Note>
+Both adapters implement the same `StateAdapter` interface and can be swapped without code changes.
+</Note>
+
+## Migration from redis
+
+<Steps>
+  <Step title="Install ioredis adapter">
+    ```bash
+    npm install @chat-adapter/state-ioredis
+    npm uninstall @chat-adapter/state-redis
+    ```
+  </Step>
+
+  <Step title="Update imports">
+    ```typescript
+    // Before
+    import { createRedisState } from '@chat-adapter/state-redis';
+
+    // After
+    import { createIoRedisState } from '@chat-adapter/state-ioredis';
+    ```
+  </Step>
+
+  <Step title="Update configuration">
+    ```typescript
+    // Before
+    const state = createRedisState({ url: process.env.REDIS_URL });
+
+    // After
+    const state = createIoRedisState({ url: process.env.REDIS_URL });
+    ```
+  </Step>
+
+  <Step title="Test">
+    Data is compatible. Keys use the same format, so existing subscriptions and cache persist.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Redis Adapter" icon="database" href="/state/redis">
+    Simple Redis setup for single instance
+  </Card>
+  <Card title="State Overview" icon="database" href="/state">
+    Learn about subscriptions and locking
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/deployment">
+    Production deployment guides
+  </Card>
+  <Card title="ioredis Docs" icon="book" href="https://github.com/redis/ioredis">
+    Official ioredis documentation
+  </Card>
+</CardGroup>

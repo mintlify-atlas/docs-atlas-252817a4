@@ -1,0 +1,113 @@
+---
+title: API Reference
+description: Complete API reference for the Chat SDK Core API
+---
+
+The Chat SDK provides a unified API for building cross-platform chat applications that work with Slack, Google Chat, Microsoft Teams, and Discord.
+
+## Core Classes
+
+<CardGroup cols={2}>
+  <Card title="Chat" icon="comments" href="/api/chat">
+    Main entry point for creating chat bots with handlers and webhooks
+  </Card>
+  <Card title="Thread" icon="message" href="/api/thread">
+    Represents a conversation thread with message posting and state management
+  </Card>
+  <Card title="Channel" icon="hashtag" href="/api/channel">
+    Represents a channel/conversation container that holds threads
+  </Card>
+  <Card title="Message" icon="envelope" href="/api/message">
+    A chat message with metadata, formatting, and attachments
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+```typescript
+import { Chat } from "chat";
+import { createSlackAdapter } from "@chat-adapter/slack";
+import { createMemoryState } from "@chat-state/memory";
+
+const chat = new Chat({
+  userName: "mybot",
+  adapters: {
+    slack: createSlackAdapter({
+      botToken: process.env.SLACK_BOT_TOKEN,
+      signingSecret: process.env.SLACK_SIGNING_SECRET,
+    }),
+  },
+  state: createMemoryState(),
+});
+
+// Handle @-mentions
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await thread.post("Hello! How can I help?");
+});
+
+// Handle subscribed threads
+chat.onSubscribedMessage(async (thread, message) => {
+  await thread.post(`You said: ${message.text}`);
+});
+
+// Set up webhook
+export async function POST(request: Request) {
+  return chat.webhooks.slack(request);
+}
+```
+
+## Type Safety
+
+The Chat SDK is fully type-safe with TypeScript. Use generics to define custom state types:
+
+```typescript
+interface MyThreadState {
+  aiMode?: boolean;
+  userName?: string;
+  conversationHistory?: string[];
+}
+
+const chat = new Chat<typeof adapters, MyThreadState>({
+  userName: "mybot",
+  adapters: { slack: slackAdapter },
+  state: redisState,
+});
+
+chat.onNewMention(async (thread, message) => {
+  await thread.setState({ aiMode: true });
+  const state = await thread.state; // Type: MyThreadState | null
+});
+```
+
+## Architecture
+
+### Thread ID Format
+
+All thread IDs follow the pattern: `{adapter}:{channel}:{thread}`
+
+- Slack: `slack:C123ABC:1234567890.123456`
+- Teams: `teams:{base64(conversationId)}:{base64(serviceUrl)}`
+- Google Chat: `gchat:spaces/ABC123:{base64(threadName)}`
+
+### Message Flow
+
+1. Platform sends webhook to `/api/webhooks/{platform}`
+2. Adapter verifies request and parses message
+3. Chat acquires lock on thread
+4. Checks subscription status and calls appropriate handlers
+5. Handlers receive Thread and Message objects
+
+### State Management
+
+Thread and channel state is stored in the StateAdapter with:
+- 30-day TTL by default
+- Merge-by-default (use `{ replace: true }` to override)
+- Per-thread and per-channel namespaces
+
+## See Also
+
+- [Event Handlers](/core/handlers) - Message, action, and reaction handlers
+- [Webhooks](/core/webhooks) - Setting up platform webhooks
+- [State Management](/core/state) - Thread and channel state
+- [Formatting](/core/formatting) - Markdown and rich formatting

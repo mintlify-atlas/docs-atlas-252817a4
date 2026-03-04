@@ -1,122 +1,124 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Chat SDK",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#0070F3",
+    "light": "#3291FF",
+    "dark": "#0761D1"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/vercel/chat"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/vercel/chat"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "getting-started",
+              "usage"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "threads-messages-channels",
+              "handling-events",
+              "posting-messages",
+              "streaming"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Features",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "cards",
+              "actions",
+              "modals",
+              "slash-commands",
+              "emoji",
+              "direct-messages",
+              "ephemeral-messages",
+              "files",
+              "error-handling"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Adapters",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "adapters/index",
+              "adapters/slack",
+              "adapters/teams",
+              "adapters/gchat",
+              "adapters/discord",
+              "adapters/telegram",
+              "adapters/github",
+              "adapters/linear"
+            ]
+          },
+          {
+            "group": "State Management",
+            "pages": [
+              "state/index",
+              "state/redis",
+              "state/ioredis",
+              "state/memory"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/slack-nextjs",
+              "guides/discord-nuxt",
+              "guides/code-review-hono"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Core API",
             "pages": [
-              "api-reference/introduction"
+              "api/index",
+              "api/chat",
+              "api/thread",
+              "api/channel",
+              "api/message"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Content",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/postable-message",
+              "api/cards",
+              "api/modals",
+              "api/markdown",
+              "api/emoji"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "api/state-adapter",
+              "api/adapter",
+              "api/types"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

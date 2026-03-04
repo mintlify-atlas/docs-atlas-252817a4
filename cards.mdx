@@ -1,0 +1,297 @@
+---
+title: Cards and UI Components
+description: Build rich interactive cards with JSX or function API that work across Slack, Teams, and Google Chat
+---
+
+# Cards and UI Components
+
+The Chat SDK provides a unified API for creating rich cards that automatically convert to platform-specific formats:
+- **Slack**: Block Kit
+- **Microsoft Teams**: Adaptive Cards  
+- **Google Chat**: Card v2
+
+You can use either JSX syntax or function calls to build cards.
+
+## JSX Syntax
+
+To use JSX, configure your `tsconfig.json`:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "chat"
+  }
+}
+```
+
+Then create cards with JSX:
+
+```tsx
+/** @jsxImportSource chat */
+import { Card, Text, Actions, Button } from "chat";
+
+await thread.post(
+  <Card title="Order #1234">
+    <Text>Total: $50.00</Text>
+    <Actions>
+      <Button id="approve" style="primary">Approve</Button>
+      <Button id="reject" style="danger">Reject</Button>
+    </Actions>
+  </Card>
+);
+```
+
+## Function API
+
+Prefer function calls? Same result:
+
+```typescript
+import { Card, Text, Actions, Button } from "chat";
+
+await thread.post(
+  Card({
+    title: "Order #1234",
+    children: [
+      Text("Total: $50.00"),
+      Actions([
+        Button({ id: "approve", label: "Approve", style: "primary" }),
+        Button({ id: "reject", label: "Reject", style: "danger" }),
+      ]),
+    ],
+  })
+);
+```
+
+## Available Components
+
+### Card
+
+The root container for all card content.
+
+```typescript
+interface CardElement {
+  type: "card";
+  title?: string;
+  subtitle?: string;
+  imageUrl?: string;
+  children: CardChild[];
+}
+```
+
+**Example:**
+
+```tsx
+<Card 
+  title="Welcome" 
+  subtitle="Getting started"
+  imageUrl="https://example.com/banner.png"
+>
+  <Text>Hello world</Text>
+</Card>
+```
+
+### Text
+
+Display text content with optional styling.
+
+```typescript
+interface TextElement {
+  type: "text";
+  content: string;
+  style?: "plain" | "bold" | "muted";
+}
+```
+
+**Example:**
+
+```tsx
+<Text style="bold">Important message</Text>
+<Text style="muted">Secondary info</Text>
+```
+
+<Note>
+Use `CardText` instead of `Text` if you need to avoid conflicts with the global DOM `Text` constructor.
+</Note>
+
+### Image
+
+Embed images in your cards.
+
+```typescript
+interface ImageElement {
+  type: "image";
+  url: string;
+  alt?: string;
+}
+```
+
+**Example:**
+
+```tsx
+<Image 
+  url="https://example.com/chart.png" 
+  alt="Sales chart"
+/>
+```
+
+### Divider
+
+A visual separator between sections.
+
+```tsx
+<Divider />
+```
+
+### Section
+
+Group related content together.
+
+```tsx
+<Section>
+  <Text>Grouped content</Text>
+  <Image url="..." />
+</Section>
+```
+
+### Fields
+
+Display key-value pairs in a multi-column layout.
+
+```typescript
+interface FieldElement {
+  type: "field";
+  label: string;
+  value: string;
+}
+```
+
+**Example:**
+
+```tsx
+<Fields>
+  <Field label="Status" value="Active" />
+  <Field label="Priority" value="High" />
+  <Field label="Assignee" value="Alice" />
+</Fields>
+```
+
+### Table
+
+Display structured data in a table format.
+
+```typescript
+interface TableElement {
+  type: "table";
+  headers: string[];
+  rows: string[][];
+  align?: ("left" | "center" | "right")[];
+}
+```
+
+**Example:**
+
+```tsx
+<Table
+  headers={["Name", "Age", "Role"]}
+  rows={[
+    ["Alice", "30", "Engineer"],
+    ["Bob", "25", "Designer"],
+  ]}
+  align={["left", "center", "right"]}
+/>
+```
+
+### Link
+
+Inline hyperlink element.
+
+```tsx
+<CardLink url="https://example.com" label="Visit Site" />
+```
+
+## Complete Example
+
+Here's a comprehensive card showcasing multiple components:
+
+```tsx
+/** @jsxImportSource chat */
+import { Card, Text, Image, Divider, Fields, Field, Table, Actions, Button, LinkButton } from "chat";
+
+await thread.post(
+  <Card 
+    title="Project Status Report"
+    subtitle="Q1 2024"
+    imageUrl="https://example.com/logo.png"
+  >
+    <Text style="bold">Executive Summary</Text>
+    <Text>All milestones on track for Q1 delivery.</Text>
+    
+    <Divider />
+    
+    <Fields>
+      <Field label="Status" value="On Track" />
+      <Field label="Budget" value="$250K" />
+      <Field label="Team Size" value="12" />
+    </Fields>
+    
+    <Divider />
+    
+    <Text style="bold">Milestone Progress</Text>
+    <Table
+      headers={["Milestone", "Progress", "Due Date"]}
+      rows={[
+        ["Design", "100%", "Jan 15"],
+        ["Development", "75%", "Feb 28"],
+        ["Testing", "25%", "Mar 15"],
+      ]}
+    />
+    
+    <Actions>
+      <Button id="approve" style="primary">Approve</Button>
+      <Button id="comment" style="default">Add Comment</Button>
+      <LinkButton url="https://project.example.com" label="View Details" />
+    </Actions>
+  </Card>
+);
+```
+
+## Fallback Text
+
+Cards automatically generate plain text fallbacks for platforms or clients that can't render rich cards:
+
+```typescript
+import { cardToFallbackText } from "chat";
+
+const fallback = cardToFallbackText(myCard);
+// Returns markdown-formatted plain text
+```
+
+## React Integration
+
+If you're using React components, convert them to card elements:
+
+```typescript
+import { fromReactElement } from "chat";
+import React from "react";
+
+const reactElement = (
+  <Card title="Hello">
+    <Text>World</Text>
+  </Card>
+);
+
+const cardElement = fromReactElement(reactElement);
+await thread.post(cardElement);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Actions" icon="hand-pointer" href="/actions">
+    Add interactive buttons and handle clicks
+  </Card>
+  <Card title="Modals" icon="window-restore" href="/modals">
+    Create forms and dialog workflows
+  </Card>
+</CardGroup>

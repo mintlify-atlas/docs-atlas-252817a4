@@ -1,0 +1,530 @@
+---
+title: Basic Usage
+description: Learn core concepts and usage patterns for Chat SDK
+---
+
+# Basic Usage
+
+This guide covers the core concepts and common usage patterns for Chat SDK.
+
+## Core Concepts
+
+### Chat Instance
+
+The `Chat` class is the main entry point. It coordinates adapters, handles webhooks, and dispatches events to your handlers.
+
+```typescript
+import { Chat } from "chat";
+import { createSlackAdapter } from "@chat-adapter/slack";
+import { createRedisState } from "@chat-adapter/state-redis";
+
+const bot = new Chat({
+  userName: "mybot",
+  adapters: {
+    slack: createSlackAdapter(),
+    teams: createTeamsAdapter(),
+  },
+  state: createRedisState(),
+});
+```
+
+**Configuration options:**
+
+- `userName` - Bot username (required)
+- `adapters` - Map of adapter instances (required)  
+- `state` - State adapter for persistence (required)
+- `logger` - Logger instance or log level (`"info"`, `"debug"`, `"silent"`)
+- `streamingUpdateIntervalMs` - Update interval for fallback streaming (default: 500ms)
+- `fallbackStreamingPlaceholderText` - Initial placeholder for streaming (default: `"..."`)
+- `dedupeTtlMs` - Message deduplication TTL (default: 300000ms / 5 minutes)
+
+### Thread
+
+A `Thread` represents a conversation. It's the primary interface for posting messages, managing subscriptions, and accessing thread state.
+
+```typescript
+// Post a message
+await thread.post("Hello world!");
+
+// Subscribe to future messages
+await thread.subscribe();
+
+// Check subscription status  
+const subscribed = await thread.isSubscribed();
+
+// Access thread state
+const state = await thread.state;
+await thread.setState({ aiMode: true });
+```
+
+**Key properties:**
+
+- `id` - Unique thread ID (format: `adapter:channel:thread`)
+- `channelId` - Channel/conversation ID
+- `isDM` - Whether this is a direct message
+- `adapter` - The adapter instance for this thread
+- `state` - Custom thread state (typed if you provide a type parameter)
+
+### Message
+
+Messages contain text, formatting, metadata, and attachments:
+
+```typescript
+bot.onNewMention(async (thread, message) => {
+  console.log(message.text);           // Plain text
+  console.log(message.formatted);      // mdast AST
+  console.log(message.author.userId);  // User ID
+  console.log(message.metadata.dateSent); // Timestamp
+  console.log(message.isMention);      // true for @mentions
+});
+```
+
+**Message properties:**
+
+- `text` - Plain text content  
+- `formatted` - mdast AST representation
+- `raw` - Platform-specific raw message
+- `author` - Author information (userId, userName, fullName, isBot, isMe)
+- `metadata` - Timestamp, edited status
+- `attachments` - File/image attachments
+- `isMention` - Whether the bot was @mentioned
+
+## Event Handlers
+
+### Mentions
+
+Handle @mentions of your bot in **unsubscribed** threads:
+
+```typescript
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await thread.post("Hello! I'll watch this thread.");
+});
+```
+
+<Warning>
+`onNewMention` only fires for mentions in **unsubscribed** threads. After calling `thread.subscribe()`, all subsequent messages (including mentions) go to `onSubscribedMessage` handlers.
+</Warning>
+
+### Subscribed Messages
+
+Handle all messages in threads you've subscribed to:
+
+```typescript
+bot.onSubscribedMessage(async (thread, message) => {
+  // Check if this specific message is a mention
+  if (message.isMention) {
+    await thread.post("You mentioned me!");
+  } else {
+    await thread.post(`Got: ${message.text}`);
+  }
+});
+```
+
+<Note>
+The initial message that triggered `thread.subscribe()` does **not** fire `onSubscribedMessage`. Only subsequent messages do.
+</Note>
+
+### Pattern Matching
+
+Match messages against regex patterns:
+
+```typescript
+bot.onNewMessage(/^help$/i, async (thread, message) => {
+  await thread.post("Here's how to use this bot...");
+});
+
+bot.onNewMessage(/deploy (\w+)/, async (thread, message) => {
+  const [, environment] = message.text.match(/deploy (\w+)/)!;
+  await thread.post(`Deploying to ${environment}...`);
+});
+```
+
+### Reactions
+
+Handle emoji reactions:
+
+```typescript
+import { emoji } from "chat";
+
+// Handle specific emoji
+bot.onReaction([emoji.thumbs_up, emoji.rocket], async (event) => {
+  if (event.added) {
+    await event.thread.post(`Thanks for the ${event.emoji}!`);
+  }
+});
+
+// Handle all reactions
+bot.onReaction(async (event) => {
+  console.log(`${event.user.userName} ${event.added ? "added" : "removed"} ${event.rawEmoji}`);
+});
+```
+
+**Emoji usage:**
+
+```typescript
+import { emoji } from "chat";
+
+// In messages (toString() is called automatically)
+await thread.post(`Great work ${emoji.thumbs_up}`);
+
+// Add reactions to messages
+const msg = await thread.post("Hello!");
+await msg.addReaction(emoji.wave);
+```
+
+### Button Clicks (Actions)
+
+Handle button clicks in interactive cards:
+
+```typescript
+bot.onAction("approve", async (event) => {
+  await event.thread.post(`Order ${event.value} approved by ${event.user.userName}`);
+});
+
+bot.onAction(["approve", "reject"], async (event) => {
+  if (event.actionId === "approve") {
+    // Handle approval
+  } else {
+    // Handle rejection  
+  }
+});
+```
+
+### Slash Commands
+
+Handle slash commands:
+
+```typescript
+bot.onSlashCommand("/status", async (event) => {
+  await event.channel.post("All systems operational!");
+});
+
+bot.onSlashCommand("/feedback", async (event) => {
+  // Open a modal form
+  await event.openModal({
+    type: "modal",
+    callbackId: "feedback_modal",
+    title: "Submit Feedback",
+    children: [
+      {
+        type: "text_input",
+        id: "message",
+        label: "Your feedback",
+        multiline: true,
+      },
+    ],
+  });
+});
+```
+
+## Posting Messages
+
+### Simple Text
+
+```typescript
+await thread.post("Hello world!");
+```
+
+### Markdown
+
+```typescript
+await thread.post({
+  markdown: "**Bold** and _italic_ text\n\nWith a [link](https://example.com)"
+});
+```
+
+### With Emoji
+
+```typescript
+import { emoji } from "chat";
+
+await thread.post(`Deployment complete ${emoji.rocket}`);
+```
+
+### With Attachments
+
+```typescript
+await thread.post({
+  markdown: "Here's the report:",
+  files: [
+    {
+      filename: "report.pdf",
+      data: pdfBuffer,
+      mimeType: "application/pdf",
+    },
+  ],
+});
+```
+
+### Interactive Cards (JSX)
+
+```typescript
+/** @jsxImportSource chat */
+import { Card, Section, Button, Actions } from "chat";
+
+await thread.post(
+  <Card title="Order Approval">
+    <Section>
+      Order #{orderId} requires approval
+    </Section>
+    <Actions>
+      <Button id="approve" value={orderId} style="primary">
+        Approve
+      </Button>
+      <Button id="reject" value={orderId} style="danger">
+        Reject  
+      </Button>
+    </Actions>
+  </Card>
+);
+```
+
+### Streaming AI Responses
+
+```typescript
+import { streamText } from "ai";
+
+bot.onSubscribedMessage(async (thread, message) => {
+  const result = streamText({
+    model: openai("gpt-4"),
+    prompt: message.text,
+  });
+  
+  // Stream directly to chat (uses native streaming on Slack)
+  await thread.post(result.textStream);
+});
+```
+
+<Note>
+Streaming uses native Slack streaming APIs when available. On other platforms, it falls back to post + periodic edits.
+</Note>
+
+## Editing and Deleting Messages
+
+```typescript
+// Edit a message
+const msg = await thread.post("Processing...");
+await msg.edit("Done!");
+
+// Delete a message
+await msg.delete();
+
+// Add/remove reactions
+await msg.addReaction(emoji.check);
+await msg.removeReaction(emoji.check);
+```
+
+## Thread State
+
+Store custom data per thread:
+
+```typescript
+interface MyThreadState {
+  aiMode?: boolean;
+  userName?: string;
+}
+
+const bot = new Chat<typeof adapters, MyThreadState>({
+  userName: "mybot",
+  adapters,
+  state,
+});
+
+bot.onNewMention(async (thread, message) => {
+  // Set state (merges by default)
+  await thread.setState({ aiMode: true, userName: message.author.userName });
+  
+  // Get state (fully typed)
+  const state = await thread.state;
+  if (state?.aiMode) {
+    // AI mode is enabled
+  }
+  
+  // Replace entire state
+  await thread.setState({ aiMode: false }, { replace: true });
+});
+```
+
+**State TTL:** Thread state persists for 30 days by default.
+
+## Iterating Messages
+
+### Recent Messages (Newest First)
+
+```typescript
+for await (const message of thread.messages) {
+  console.log(message.text);
+  // Automatically paginates backward from most recent
+}
+```
+
+### All Messages (Oldest First)
+
+```typescript  
+for await (const message of thread.allMessages) {
+  console.log(message.text);
+  // Automatically paginates forward from oldest
+}
+```
+
+### Manual Pagination
+
+```typescript
+const result = await thread.adapter.fetchMessages(thread.id, {
+  limit: 50,
+  direction: "backward", // or "forward"
+});
+
+console.log(result.messages);
+
+if (result.nextCursor) {
+  const next = await thread.adapter.fetchMessages(thread.id, {
+    cursor: result.nextCursor,
+  });
+}
+```
+
+## Ephemeral Messages
+
+Send messages visible only to a specific user:
+
+```typescript
+// With native ephemeral (Slack, Google Chat)
+await thread.postEphemeral(
+  message.author,
+  "This is just for you!",
+  { fallbackToDM: false }
+);
+
+// With DM fallback (Discord, Teams)
+const result = await thread.postEphemeral(
+  message.author,
+  "This is just for you!",
+  { fallbackToDM: true }
+);
+
+if (result?.usedFallback) {
+  console.log("Sent via DM instead");
+}
+```
+
+<Warning>
+Ephemeral messages on Slack are session-dependent and disappear on reload. On Google Chat they persist. Discord and Teams require `fallbackToDM: true`.
+</Warning>
+
+## Typing Indicators
+
+```typescript
+await thread.startTyping();
+await thread.startTyping("Thinking..."); // Optional status text
+```
+
+<Note>
+Some platforms show persistent typing indicators, others send a single ping. The optional status parameter is only supported on select platforms.
+</Note>
+
+## Direct Messages
+
+Open a DM conversation:
+
+```typescript
+const dmThreadId = await adapter.openDM(userId);
+const dmThread = new ThreadImpl({
+  id: dmThreadId,
+  adapter,
+  stateAdapter: state,
+  channelId: dmThreadId,
+  isDM: true,
+});
+
+await dmThread.post("Hello via DM!");
+```
+
+## Custom Thread State Types
+
+Define custom state for type safety:
+
+```typescript
+interface MyState {
+  conversationMode: "ai" | "human";
+  lastPrompt?: string;
+}
+
+const bot = new Chat<typeof adapters, MyState>({
+  userName: "mybot",
+  adapters,
+  state,
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  const state = await thread.state; // Type: MyState | null
+  
+  if (state?.conversationMode === "ai") {
+    // Handle AI mode
+  }
+});
+```
+
+## Error Handling
+
+```typescript
+import { ChatError, RateLimitError, LockError } from "chat";
+
+bot.onSubscribedMessage(async (thread, message) => {
+  try {
+    await thread.post("Hello!");
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      console.log("Rate limited, retrying...");
+    } else if (error instanceof LockError) {
+      console.log("Thread is locked by another process");
+    } else if (error instanceof ChatError) {
+      console.log("Chat SDK error:", error.message);
+    }
+  }
+});
+```
+
+## Logging
+
+Configure logging level:
+
+```typescript
+import { ConsoleLogger } from "chat";
+
+const bot = new Chat({
+  userName: "mybot",
+  adapters,
+  state,
+  logger: "debug", // "silent" | "error" | "warn" | "info" | "debug"
+});
+
+// Or use a custom logger
+const bot = new Chat({
+  userName: "mybot",
+  adapters,
+  state,
+  logger: new ConsoleLogger("debug"),
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Event Handlers" icon="bell">
+    Deep dive into all event types
+  </Card>
+  
+  <Card title="AI Streaming" icon="sparkles">
+    Stream LLM responses
+  </Card>
+  
+  <Card title="Interactive Cards" icon="window">
+    Build rich UI with JSX
+  </Card>
+  
+  <Card title="Adapters" icon="plug">
+    Platform-specific configuration
+  </Card>
+</CardGroup>

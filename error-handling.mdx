@@ -1,0 +1,464 @@
+---
+title: Error Handling Patterns
+description: Handle errors gracefully in your chat bot with typed error classes and best practices
+---
+
+# Error Handling Patterns
+
+The Chat SDK provides typed error classes and patterns for handling failures in message handlers, API calls, and platform interactions.
+
+## Error Classes
+
+The SDK exports specialized error types:
+
+```typescript
+import { ChatError, RateLimitError, LockError, NotImplementedError } from "chat";
+```
+
+### ChatError
+
+Base error class for all SDK errors:
+
+```typescript
+class ChatError extends Error {
+  readonly code: string;      // Error code (e.g., "RATE_LIMITED")
+  readonly cause?: unknown;   // Original error that caused this
+  
+  constructor(message: string, code: string, cause?: unknown);
+}
+```
+
+**Example:**
+
+```typescript
+try {
+  await thread.post(message);
+} catch (error) {
+  if (error instanceof ChatError) {
+    console.error(`Chat error [${error.code}]: ${error.message}`);
+    console.error("Caused by:", error.cause);
+  }
+}
+```
+
+### RateLimitError
+
+Thrown when hitting platform rate limits:
+
+```typescript
+class RateLimitError extends ChatError {
+  readonly retryAfterMs?: number;  // Milliseconds to wait before retrying
+  
+  constructor(message: string, retryAfterMs?: number, cause?: unknown);
+}
+```
+
+**Example:**
+
+```typescript
+import { RateLimitError } from "chat";
+
+try {
+  await thread.post(message);
+} catch (error) {
+  if (error instanceof RateLimitError) {
+    const waitMs = error.retryAfterMs || 1000;
+    console.log(`Rate limited. Retrying in ${waitMs}ms...`);
+    
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    await thread.post(message); // Retry
+  }
+}
+```
+
+### LockError
+
+Thrown when failing to acquire a thread lock:
+
+```typescript
+class LockError extends ChatError {
+  constructor(message: string, cause?: unknown);
+}
+```
+
+**Example:**
+
+```typescript
+import { LockError } from "chat";
+
+try {
+  await processMessage(thread, message);
+} catch (error) {
+  if (error instanceof LockError) {
+    console.error("Failed to acquire lock on thread:", error.message);
+    // Another instance is already processing this thread
+  }
+}
+```
+
+### NotImplementedError
+
+Thrown when a feature is not supported by the platform:
+
+```typescript
+class NotImplementedError extends ChatError {
+  readonly feature?: string;  // Name of the unsupported feature
+  
+  constructor(message: string, feature?: string, cause?: unknown);
+}
+```
+
+**Example:**
+
+```typescript
+import { NotImplementedError } from "chat";
+
+try {
+  await adapter.stream(threadId, textStream);
+} catch (error) {
+  if (error instanceof NotImplementedError) {
+    console.log(`Streaming not supported: ${error.feature}`);
+    // Fall back to post + edit approach
+    await fallbackStream(threadId, textStream);
+  }
+}
+```
+
+## Error Handling in Handlers
+
+### Try-Catch in Handlers
+
+Wrap handler logic in try-catch:
+
+```typescript
+import { emoji } from "chat";
+
+chat.onNewMention(async (thread, message) => {
+  try {
+    const result = await processRequest(message.text);
+    await thread.post(`${emoji.check} Success: ${result}`);
+  } catch (error) {
+    console.error("Handler error:", error);
+    await thread.post(
+      `${emoji.x} Sorry, an error occurred: ${error.message}`
+    );
+  }
+});
+```
+
+### Ephemeral Error Messages
+
+Show errors only to the user who triggered them:
+
+```typescript
+chat.onSlashCommand("/deploy", async (event) => {
+  try {
+    const result = await deploy(event.text);
+    await event.channel.post(`${emoji.rocket} Deployed: ${result}`);
+  } catch (error) {
+    await event.channel.postEphemeral(
+      event.user,
+      `${emoji.warning} Deployment failed: ${error.message}`,
+      { fallbackToDM: false }
+    );
+  }
+});
+```
+
+### Validation Errors
+
+Handle validation failures early:
+
+```typescript
+import { emoji } from "chat";
+
+chat.onAction("submit", async (event) => {
+  const value = event.value;
+  
+  if (!value || value.length < 3) {
+    await event.thread.postEphemeral(
+      event.user,
+      `${emoji.x} Value must be at least 3 characters`,
+      { fallbackToDM: false }
+    );
+    return;
+  }
+  
+  try {
+    await processValue(value);
+    await event.thread.post(`${emoji.check} Processed successfully`);
+  } catch (error) {
+    await event.thread.post(`${emoji.warning} Processing failed`);
+  }
+});
+```
+
+## Retry Logic
+
+Implement exponential backoff for transient failures:
+
+```typescript
+import { RateLimitError } from "chat";
+
+async function postWithRetry(
+  thread: Thread,
+  message: string,
+  maxRetries = 3
+) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await thread.post(message);
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        const waitMs = error.retryAfterMs || 1000 * (i + 1);
+        console.log(`Rate limited. Retry ${i + 1}/${maxRetries} in ${waitMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      } else {
+        throw error; // Re-throw non-retryable errors
+      }
+    }
+  }
+  
+  throw new Error("Max retries exceeded");
+}
+
+// Usage
+try {
+  await postWithRetry(thread, "Important message");
+} catch (error) {
+  console.error("Failed after retries:", error);
+}
+```
+
+## Modal Validation Errors
+
+Return validation errors from modal submissions:
+
+```typescript
+import { emoji } from "chat";
+
+chat.onModalSubmit("user_form", async (event) => {
+  const { email, age } = event.values;
+  
+  // Validate fields
+  const errors: Record<string, string> = {};
+  
+  if (!email.includes("@")) {
+    errors.email = "Please enter a valid email address";
+  }
+  
+  if (parseInt(age) < 18) {
+    errors.age = "Must be 18 or older";
+  }
+  
+  if (Object.keys(errors).length > 0) {
+    return {
+      action: "errors",
+      errors,
+    };
+  }
+  
+  // Process valid submission
+  try {
+    await saveUser(event.values);
+    
+    if (event.relatedThread) {
+      await event.relatedThread.post(
+        `${emoji.check} User created successfully`
+      );
+    }
+  } catch (error) {
+    // Return error to modal
+    return {
+      action: "errors",
+      errors: {
+        _form: `Failed to save: ${error.message}`,
+      },
+    };
+  }
+});
+```
+
+## Graceful Degradation
+
+Handle unsupported features gracefully:
+
+```typescript
+import { NotImplementedError } from "chat";
+
+chat.onNewMention(async (thread, message) => {
+  try {
+    // Try native streaming first
+    if (thread.adapter.stream) {
+      const response = await generateResponse(message.text);
+      await thread.adapter.stream(thread.id, response.textStream);
+    } else {
+      throw new NotImplementedError("Streaming not supported");
+    }
+  } catch (error) {
+    if (error instanceof NotImplementedError) {
+      // Fall back to regular post
+      const response = await generateResponse(message.text);
+      const fullText = await consumeStream(response.textStream);
+      await thread.post(fullText);
+    } else {
+      throw error;
+    }
+  }
+});
+```
+
+## Logging Errors
+
+Use the built-in logger:
+
+```typescript
+import { Chat, ConsoleLogger } from "chat";
+
+const chat = new Chat({
+  logger: new ConsoleLogger("debug"), // "debug" | "info" | "warn" | "error" | "silent"
+  // ... other config
+});
+
+// Or provide a custom logger
+const customLogger = {
+  debug: (msg: string, meta?: unknown) => console.debug(msg, meta),
+  info: (msg: string, meta?: unknown) => console.info(msg, meta),
+  warn: (msg: string, meta?: unknown) => console.warn(msg, meta),
+  error: (msg: string, meta?: unknown) => console.error(msg, meta),
+};
+
+const chat2 = new Chat({
+  logger: customLogger,
+  // ... other config
+});
+```
+
+## Complete Example
+
+Robust error handling with retries and logging:
+
+```typescript
+import { 
+  Chat, 
+  ChatError, 
+  RateLimitError, 
+  NotImplementedError,
+  ConsoleLogger,
+  emoji 
+} from "chat";
+
+const chat = new Chat({
+  logger: new ConsoleLogger("debug"),
+  // ... other config
+});
+
+const logger = chat.getLogger();
+
+chat.onNewMention(async (thread, message) => {
+  try {
+    logger.info("Processing mention", { 
+      threadId: thread.id, 
+      userId: message.author.userId 
+    });
+    
+    // Validate input
+    if (!message.text.trim()) {
+      await thread.postEphemeral(
+        message.author,
+        `${emoji.warning} Please provide a message`,
+        { fallbackToDM: false }
+      );
+      return;
+    }
+    
+    // Process with retries
+    let result;
+    for (let i = 0; i < 3; i++) {
+      try {
+        result = await processMessage(message.text);
+        break;
+      } catch (error) {
+        if (error instanceof RateLimitError) {
+          const waitMs = error.retryAfterMs || 1000 * (i + 1);
+          logger.warn(`Rate limited, retrying in ${waitMs}ms`, { attempt: i + 1 });
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        } else {
+          throw error;
+        }
+      }
+    }
+    
+    if (!result) {
+      throw new Error("Failed after retries");
+    }
+    
+    // Post result
+    await thread.post(
+      `${emoji.check} Result: ${result}`
+    );
+    
+    logger.info("Mention processed successfully", { threadId: thread.id });
+    
+  } catch (error) {
+    logger.error("Failed to process mention", { 
+      error,
+      threadId: thread.id 
+    });
+    
+    // User-friendly error message
+    let errorMessage = "An unexpected error occurred.";
+    
+    if (error instanceof RateLimitError) {
+      errorMessage = "Service is busy. Please try again later.";
+    } else if (error instanceof NotImplementedError) {
+      errorMessage = `Feature not available: ${error.feature}`;
+    } else if (error instanceof ChatError) {
+      errorMessage = error.message;
+    }
+    
+    await thread.post(
+      `${emoji.x} ${errorMessage}`
+    );
+  }
+});
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always catch errors in handlers">
+    Unhandled errors in async handlers can crash your application. Wrap all handler logic in try-catch blocks.
+  </Accordion>
+  
+  <Accordion title="Use ephemeral messages for user errors">
+    Don't clutter channels with error messages. Show validation and user-specific errors as ephemeral messages.
+  </Accordion>
+  
+  <Accordion title="Log all errors with context">
+    Include relevant context (threadId, userId, etc.) when logging errors to help with debugging.
+  </Accordion>
+  
+  <Accordion title="Implement retry logic for rate limits">
+    Use exponential backoff when retrying rate-limited operations. Respect the retryAfterMs value.
+  </Accordion>
+  
+  <Accordion title="Provide user-friendly error messages">
+    Don't expose stack traces or technical details to users. Translate errors into helpful messages.
+  </Accordion>
+  
+  <Accordion title="Handle platform differences gracefully">
+    Not all platforms support all features. Use feature detection and fallbacks.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Actions" icon="hand-pointer" href="/actions">
+    Handle errors in button click handlers
+  </Card>
+  <Card title="Modals" icon="window-restore" href="/modals">
+    Return validation errors from modal submissions
+  </Card>
+</CardGroup>

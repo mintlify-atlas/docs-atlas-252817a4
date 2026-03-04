@@ -1,0 +1,113 @@
+---
+title: Chat SDK
+description: A unified TypeScript SDK for building chat bots across Slack, Microsoft Teams, Google Chat, Discord, Telegram, GitHub, and Linear
+---
+
+# Chat SDK
+
+A unified TypeScript SDK for building chat bots across multiple platforms. Write your bot logic once, deploy everywhere.
+
+## Why Chat SDK?
+
+<CardGroup cols={2}>
+  <Card title="Write Once, Deploy Everywhere" icon="code">
+    Build your bot logic once with a unified API. Deploy to Slack, Teams, Google Chat, Discord, Telegram, GitHub, and Linear without platform-specific code.
+  </Card>
+  
+  <Card title="Type-Safe & Modern" icon="shield-check">
+    Built with TypeScript for full type safety. Async/await throughout. IntelliSense for all platform features.
+  </Card>
+  
+  <Card title="AI-Ready Streaming" icon="sparkles">
+    Native support for streaming AI responses. Works with any LLM provider. Platform-native streaming on Slack, fallback post+edit on others.
+  </Card>
+  
+  <Card title="Rich Interactive Components" icon="puzzle-piece">
+    JSX-based cards with buttons, modals, and forms. Automatically adapted to each platform's native format (Block Kit, Adaptive Cards, etc).
+  </Card>
+</CardGroup>
+
+## Supported Platforms
+
+Chat SDK supports 7 major chat platforms with a consistent API:
+
+| Platform | Package | Mentions | Reactions | Cards | Modals | Streaming | DMs |
+|----------|---------|----------|-----------|-------|--------|-----------|-----|
+| Slack | `@chat-adapter/slack` | ✓ | ✓ | ✓ | ✓ | Native | ✓ |
+| Microsoft Teams | `@chat-adapter/teams` | ✓ | Read-only | ✓ | ✗ | Post+Edit | ✓ |
+| Google Chat | `@chat-adapter/gchat` | ✓ | ✓ | ✓ | ✗ | Post+Edit | ✓ |
+| Discord | `@chat-adapter/discord` | ✓ | ✓ | ✓ | ✗ | Post+Edit | ✓ |
+| Telegram | `@chat-adapter/telegram` | ✓ | ✓ | Partial | ✗ | Post+Edit | ✓ |
+| GitHub | `@chat-adapter/github` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Linear | `@chat-adapter/linear` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+
+## Quick Example
+
+```typescript
+import { Chat } from "chat";
+import { createSlackAdapter } from "@chat-adapter/slack";
+import { createRedisState } from "@chat-adapter/state-redis";
+
+const bot = new Chat({
+  userName: "mybot",
+  adapters: {
+    slack: createSlackAdapter(),
+  },
+  state: createRedisState(),
+});
+
+// Respond to @mentions
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await thread.post("Hello! I'm listening to this thread.");
+});
+
+// Handle all messages in subscribed threads
+bot.onSubscribedMessage(async (thread, message) => {
+  await thread.post(`You said: ${message.text}`);
+});
+```
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="rocket" href="/getting-started">
+    Install the SDK and create your first bot in minutes
+  </Card>
+  
+  <Card title="Basic Usage" icon="book" href="/usage">
+    Learn core concepts: event handlers, threads, messages, and state management
+  </Card>
+  
+  <Card title="Event Handlers" icon="bell">
+    Respond to mentions, messages, reactions, button clicks, slash commands, and modals
+  </Card>
+  
+  <Card title="AI Streaming" icon="wand-magic-sparkles">
+    Stream LLM responses with native Slack streaming and automatic fallback for other platforms
+  </Card>
+  
+  <Card title="Interactive Cards" icon="window">
+    Build rich UI with JSX cards, buttons, and form modals
+  </Card>
+  
+  <Card title="Cross-Platform Emoji" icon="smile">
+    Type-safe emoji that work consistently across all platforms
+  </Card>
+</CardGroup>
+
+## Architecture
+
+Chat SDK uses a clean adapter pattern:
+
+- **Core SDK** (`chat`) - Platform-agnostic bot logic, types, and utilities
+- **Adapters** - Platform-specific implementations (Slack, Teams, etc)
+- **State Adapters** - Persistence layer for subscriptions and locking (Redis, in-memory)
+
+<Note>
+The SDK uses [mdast](https://github.com/syntax-tree/mdast) (Markdown AST) as the canonical message format. Each adapter converts to/from platform-specific formats automatically.
+</Note>
+
+## Installation
+
+Get started with the [installation guide](/getting-started) or explore the core concepts in the [usage guide](/usage).

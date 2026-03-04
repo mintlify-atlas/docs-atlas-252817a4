@@ -1,0 +1,285 @@
+---
+title: StateAdapter
+description: Interface for implementing custom state adapters for thread subscriptions and distributed locking
+---
+
+The `StateAdapter` interface defines the contract for managing persistent state in Chat SDK. State adapters handle thread subscriptions, distributed locking, and caching.
+
+## Built-in Implementations
+
+Chat SDK provides three state adapter implementations:
+
+- **[@chat-adapter/state-redis](/state/redis)** - Production Redis adapter
+- **[@chat-adapter/state-ioredis](/state/ioredis)** - ioredis-based adapter with cluster support
+- **[@chat-adapter/state-memory](/state/memory)** - In-memory adapter for development
+
+## Interface
+
+```typescript
+interface StateAdapter {
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  
+  // Subscriptions
+  subscribe(threadId: string): Promise<void>;
+  unsubscribe(threadId: string): Promise<void>;
+  isSubscribed(threadId: string): Promise<boolean>;
+  
+  // Locking
+  acquireLock(threadId: string, ttlMs: number): Promise<Lock | null>;
+  releaseLock(lock: Lock): Promise<void>;
+  extendLock(lock: Lock, ttlMs: number): Promise<boolean>;
+  
+  // Caching
+  get<T = unknown>(key: string): Promise<T | null>;
+  set<T = unknown>(key: string, value: T, ttlMs?: number): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
+interface Lock {
+  threadId: string;
+  token: string;
+  expiresAt: number;
+}
+```
+
+## Methods
+
+### connect()
+
+Establish connection to the state backend.
+
+```typescript
+await state.connect();
+```
+
+Called automatically by Chat SDK during initialization.
+
+### disconnect()
+
+Close connection to the state backend.
+
+```typescript
+await state.disconnect();
+```
+
+Called automatically by Chat SDK during shutdown.
+
+### subscribe()
+
+Subscribe to a thread to receive all future messages.
+
+<ParamField path="threadId" type="string" required>
+  The thread ID to subscribe to
+</ParamField>
+
+```typescript
+await state.subscribe("slack:C123ABC:1234567890.123456");
+```
+
+Subscriptions persist across restarts and are stored indefinitely until explicitly unsubscribed.
+
+### unsubscribe()
+
+Unsubscribe from a thread.
+
+<ParamField path="threadId" type="string" required>
+  The thread ID to unsubscribe from
+</ParamField>
+
+```typescript
+await state.unsubscribe("slack:C123ABC:1234567890.123456");
+```
+
+### isSubscribed()
+
+Check if currently subscribed to a thread.
+
+<ParamField path="threadId" type="string" required>
+  The thread ID to check
+</ParamField>
+
+<ResponseField name="isSubscribed" type="boolean">
+  Whether the thread is subscribed
+</ResponseField>
+
+```typescript
+const subscribed = await state.isSubscribed("slack:C123ABC:1234567890.123456");
+```
+
+### acquireLock()
+
+Acquire a distributed lock on a thread with a TTL.
+
+<ParamField path="threadId" type="string" required>
+  The thread ID to lock
+</ParamField>
+
+<ParamField path="ttlMs" type="number" required>
+  Time-to-live in milliseconds
+</ParamField>
+
+<ResponseField name="lock" type="Lock | null">
+  Lock object if acquired, null if already locked
+</ResponseField>
+
+```typescript
+const lock = await state.acquireLock(threadId, 5000); // 5 second lock
+if (lock) {
+  try {
+    // Process message with exclusive access
+  } finally {
+    await state.releaseLock(lock);
+  }
+}
+```
+
+Locks prevent concurrent processing of messages in the same thread across multiple instances.
+
+### releaseLock()
+
+Release a previously acquired lock.
+
+<ParamField path="lock" type="Lock" required>
+  The lock object to release
+</ParamField>
+
+```typescript
+await state.releaseLock(lock);
+```
+
+### extendLock()
+
+Extend the TTL of an existing lock.
+
+<ParamField path="lock" type="Lock" required>
+  The lock object to extend
+</ParamField>
+
+<ParamField path="ttlMs" type="number" required>
+  New time-to-live in milliseconds
+</ParamField>
+
+<ResponseField name="success" type="boolean">
+  Whether the lock was successfully extended
+</ResponseField>
+
+```typescript
+const extended = await state.extendLock(lock, 5000);
+if (!extended) {
+  // Lock expired or was released
+}
+```
+
+### get()
+
+Retrieve a cached value by key.
+
+<ParamField path="key" type="string" required>
+  Cache key
+</ParamField>
+
+<ResponseField name="value" type="T | null">
+  Cached value or null if not found
+</ResponseField>
+
+```typescript
+const data = await state.get<{ userId: string }>("user:123");
+```
+
+### set()
+
+Store a value in cache with optional TTL.
+
+<ParamField path="key" type="string" required>
+  Cache key
+</ParamField>
+
+<ParamField path="value" type="T" required>
+  Value to cache
+</ParamField>
+
+<ParamField path="ttlMs" type="number">
+  Optional time-to-live in milliseconds
+</ParamField>
+
+```typescript
+await state.set("user:123", { userId: "U123", name: "Alice" }, 3600000); // 1 hour
+```
+
+### delete()
+
+Delete a cached value by key.
+
+<ParamField path="key" type="string" required>
+  Cache key to delete
+</ParamField>
+
+```typescript
+await state.delete("user:123");
+```
+
+## Implementing a Custom Adapter
+
+To create a custom state adapter:
+
+```typescript
+import type { StateAdapter, Lock } from "chat";
+
+export class MyStateAdapter implements StateAdapter {
+  async connect(): Promise<void> {
+    // Connect to your backend
+  }
+
+  async disconnect(): Promise<void> {
+    // Close connections
+  }
+
+  async subscribe(threadId: string): Promise<void> {
+    // Store subscription
+  }
+
+  async unsubscribe(threadId: string): Promise<void> {
+    // Remove subscription
+  }
+
+  async isSubscribed(threadId: string): Promise<boolean> {
+    // Check if subscribed
+    return false;
+  }
+
+  async acquireLock(threadId: string, ttlMs: number): Promise<Lock | null> {
+    // Implement distributed locking
+    return null;
+  }
+
+  async releaseLock(lock: Lock): Promise<void> {
+    // Release the lock
+  }
+
+  async extendLock(lock: Lock, ttlMs: number): Promise<boolean> {
+    // Extend lock TTL
+    return false;
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    // Retrieve cached value
+    return null;
+  }
+
+  async set<T>(key: string, value: T, ttlMs?: number): Promise<void> {
+    // Store cached value
+  }
+
+  async delete(key: string): Promise<void> {
+    // Delete cached value
+  }
+}
+```
+
+## See Also
+
+- [State Management Overview](/state/index)
+- [Redis State Adapter](/state/redis)
+- [ioredis State Adapter](/state/ioredis)
+- [Memory State Adapter](/state/memory)

@@ -1,0 +1,383 @@
+---
+title: Google Chat Adapter
+description: Build bots for Google Chat spaces with Workspace Events API
+---
+
+## Installation
+
+```bash
+npm install @chat-adapter/gchat
+```
+
+## Environment Variables
+
+<Note>
+  Create a Google Chat app in the [Google Cloud Console](https://console.cloud.google.com/).
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOOGLE_CHAT_CREDENTIALS` | Service Account | JSON service account key (entire contents) |
+| `GOOGLE_CHAT_USE_ADC` | ADC/Workload Identity | Set to `true` to use Application Default Credentials |
+| `GOOGLE_CHAT_PUBSUB_TOPIC` | Optional | Pub/Sub topic for Workspace Events (format: `projects/my-project/topics/my-topic`) |
+| `GOOGLE_CHAT_IMPERSONATE_USER` | DM creation | User email for domain-wide delegation |
+
+## Configuration Options
+
+```typescript
+interface GoogleChatAdapterConfig {
+  /** Service account credentials JSON (use OR useApplicationDefaultCredentials) */
+  credentials?: ServiceAccountCredentials;
+  /** Use Application Default Credentials (ADC) */
+  useApplicationDefaultCredentials?: boolean;
+  /** Custom auth client (e.g., Vercel OIDC) */
+  auth?: GoogleAuth;
+  /** HTTP endpoint URL for button click actions */
+  endpointUrl?: string;
+  /** User email to impersonate (domain-wide delegation) */
+  impersonateUser?: string;
+  /** Logger instance */
+  logger: Logger;
+  /** Pub/Sub topic for receiving all messages */
+  pubsubTopic?: string;
+  /** Override bot username */
+  userName?: string;
+}
+```
+
+## Setup
+
+<Tabs>
+  <Tab title="Service Account">
+    Use a JSON service account key:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createGoogleChatAdapter } from '@chat-adapter/gchat';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        gchat: createGoogleChatAdapter({
+          credentials: JSON.parse(process.env.GOOGLE_CHAT_CREDENTIALS!),
+          pubsubTopic: process.env.GOOGLE_CHAT_PUBSUB_TOPIC,
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+  </Tab>
+
+  <Tab title="Application Default Credentials">
+    Use ADC (works with Workload Identity, GCE, Cloud Run, or `gcloud auth`):
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createGoogleChatAdapter } from '@chat-adapter/gchat';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        gchat: createGoogleChatAdapter({
+          useApplicationDefaultCredentials: true,
+          pubsubTopic: process.env.GOOGLE_CHAT_PUBSUB_TOPIC,
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+  </Tab>
+
+  <Tab title="Workload Identity Federation">
+    Use Vercel OIDC or other external identity:
+
+    ```typescript
+    import { GoogleAuth } from 'google-auth-library';
+
+    const auth = new GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/chat.bot'],
+      // ... Workload Identity Federation config
+    });
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        gchat: createGoogleChatAdapter({
+          auth,
+          pubsubTopic: process.env.GOOGLE_CHAT_PUBSUB_TOPIC,
+        }),
+      },
+      state: new MemoryState(),
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Webhook Handler
+
+```typescript
+app.post('/webhooks/gchat', async (req, res) => {
+  const response = await gchat.handleWebhook(req, {
+    waitUntil: (promise) => {/* handle async work */},
+  });
+  res.status(response.status).send(await response.text());
+});
+```
+
+## Workspace Events (Recommended)
+
+<Note>
+  **Why Workspace Events?** Direct webhooks only fire for @mentions. Workspace Events delivers ALL messages via Pub/Sub, enabling background processing and better UX.
+</Note>
+
+<Steps>
+  <Step title="Create Pub/Sub topic">
+    ```bash
+    gcloud pubsub topics create gchat-events \
+      --project=my-project
+    ```
+  </Step>
+
+  <Step title="Configure adapter">
+    Set `pubsubTopic` in your adapter config:
+    ```typescript
+    pubsubTopic: 'projects/my-project/topics/gchat-events'
+    ```
+  </Step>
+
+  <Step title="Enable domain-wide delegation">
+    Required for creating subscriptions:
+    1. Go to Google Workspace Admin Console
+    2. Security → API Controls → Domain-wide Delegation
+    3. Add your service account client ID
+    4. Authorize scopes:
+       - `https://www.googleapis.com/auth/chat.bot`
+       - `https://www.googleapis.com/auth/chat.messages.readonly`
+
+    Set `impersonateUser` to a user email in your workspace:
+    ```typescript
+    impersonateUser: 'admin@company.com'
+    ```
+  </Step>
+
+  <Step title="Create Pub/Sub push subscription">
+    Point subscription to your webhook endpoint:
+    ```bash
+    gcloud pubsub subscriptions create gchat-webhook \
+      --topic=gchat-events \
+      --push-endpoint=https://your-app.com/webhooks/gchat
+    ```
+  </Step>
+
+  <Step title="Subscribe to threads">
+    When bot joins a space or a thread is subscribed, the adapter auto-creates a Workspace Events subscription:
+    ```typescript
+    // Subscriptions are created automatically when:
+    await thread.subscribe(async (msg) => {
+      // This triggers Workspace Events subscription creation
+    });
+    ```
+  </Step>
+</Steps>
+
+## Features
+
+### Supported Events
+
+- `MESSAGE` - Messages in spaces (via direct webhook or Pub/Sub)
+- `ADDED_TO_SPACE` - Bot added to a space
+- `REMOVED_FROM_SPACE` - Bot removed from a space
+- `CARD_CLICKED` - Button clicks in cards
+- `message.v1.created` (Pub/Sub) - All messages via Workspace Events
+- `reaction.v1.created` / `reaction.v1.deleted` (Pub/Sub) - Reactions
+
+### Cards v2
+
+Google Chat uses Cards v2 format:
+
+```typescript
+import { Card, Section, Button } from 'chat/cards';
+
+await thread.post(
+  <Card title="Deployment Status">
+    <Section text="Build #42 ready to deploy" />
+    <Button actionId="deploy" style="primary">Deploy Now</Button>
+    <Button actionId="cancel">Cancel</Button>
+  </Card>
+);
+```
+
+<Warning>
+  **HTTP Endpoint Apps**: Cards require `endpointUrl` config (auto-detected from webhook URL). Button clicks route via this URL.
+</Warning>
+
+### Reactions
+
+Add/remove emoji reactions:
+
+```typescript
+await thread.addReaction(messageId, { name: 'thumbs_up' });
+await thread.removeReaction(messageId, { name: 'thumbs_up' });
+```
+
+Supported emojis: Standard Unicode emoji (👍, ❤️, 🎉, etc.)
+
+### Ephemeral Messages
+
+Send private messages visible only to one user:
+
+```typescript
+await thread.postEphemeral(userId, 'This is only visible to you');
+```
+
+### File Attachments
+
+<Warning>
+  File uploads are not yet supported. Use external links or Google Drive attachments instead.
+</Warning>
+
+## Thread IDs
+
+Google Chat thread IDs encode space and thread names:
+
+```
+gchat:{spaceName}:{base64(threadName)}
+```
+
+Examples:
+- DM (no thread): `gchat:spaces/AAAAxxxx:`
+- Space thread: `gchat:spaces/AAAAxxxx:dGhyZWFkcy95eXl5`
+
+For DMs, thread name is omitted to treat the entire DM as one subscription target.
+
+## Opening DMs
+
+Create a 1:1 conversation with a user:
+
+```typescript
+const dmThreadId = await gchat.openDM(userId);
+await chat.getThread(dmThreadId).post('Hello!');
+```
+
+<Note>
+  Requires domain-wide delegation with `impersonateUser` configured.
+</Note>
+
+## Message History
+
+Fetch message history (requires domain-wide delegation):
+
+```typescript
+const { messages, nextCursor } = await thread.fetchMessages({
+  limit: 100,
+  direction: 'backward',
+});
+```
+
+## Platform Limits
+
+- **Message length**: 4,096 characters
+- **Cards per message**: 100 cards
+- **Widgets per card**: 100 widgets
+- **Rate limits**: [Google Chat quotas](https://developers.google.com/chat/api/guides/quota)
+
+## Code Examples
+
+<CodeGroup>
+  ```typescript Mention Handler
+  chat.onNewMention(async (event) => {
+    await event.thread.post(`Hi ${event.message.author.userName}!`);
+  });
+  ```
+
+  ```typescript Reaction Handler
+  chat.onReaction(async (event) => {
+    if (event.added && event.emoji.name === 'white_check_mark') {
+      await event.thread.post('Marked as complete!');
+    }
+  });
+  ```
+
+  ```typescript Card with Actions
+  import { Card, Section, Button, TextInput } from 'chat/cards';
+
+  await thread.post(
+    <Card title="Survey">
+      <Section text="How satisfied are you?" />
+      <Button actionId="very_satisfied" style="primary">Very Satisfied</Button>
+      <Button actionId="satisfied">Satisfied</Button>
+      <Button actionId="unsatisfied" style="danger">Unsatisfied</Button>
+    </Card>
+  );
+  ```
+
+  ```typescript Action Handler
+  chat.onAction('deploy', async (event) => {
+    await event.thread.post('Deploying to production...');
+  });
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Bot only receives @mentions">
+    - Enable Workspace Events (Pub/Sub) to receive all messages
+    - Without Pub/Sub, Google Chat only sends @mention events
+  </Accordion>
+
+  <Accordion title="Workspace Events subscription fails">
+    - Enable domain-wide delegation in Workspace Admin Console
+    - Set `impersonateUser` to a user in your workspace
+    - Grant service account `https://www.googleapis.com/auth/chat.bot` scope
+    - Ensure Pub/Sub topic exists and is accessible
+  </Accordion>
+
+  <Accordion title="Button clicks don't work">
+    - For HTTP Endpoint apps: ensure `endpointUrl` is configured
+    - Verify webhook URL is publicly accessible (HTTPS required)
+    - Check Google Cloud Console logs for errors
+  </Accordion>
+
+  <Accordion title="openDM() fails">
+    - Requires domain-wide delegation with `impersonateUser`
+    - Service account needs `chat.spaces.create` scope
+    - User must be in same Workspace
+  </Accordion>
+</AccordionGroup>
+
+## Required Scopes
+
+Add these OAuth scopes to your service account:
+
+**Bot Scopes:**
+- `https://www.googleapis.com/auth/chat.bot` - Core bot functionality
+- `https://www.googleapis.com/auth/chat.messages.readonly` - Read messages
+- `https://www.googleapis.com/auth/chat.messages.reactions.create` - Add reactions
+- `https://www.googleapis.com/auth/chat.messages.reactions` - Read/remove reactions
+- `https://www.googleapis.com/auth/chat.spaces.create` - Create DMs (with domain-wide delegation)
+
+See [Google Chat scopes](https://developers.google.com/chat/api/guides/auth) for details.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Process messages and build conversation flows
+  </Card>
+  <Card title="Cards v2" icon="sparkles" href="/features/cards">
+    Create interactive UIs with Google Chat cards
+  </Card>
+  <Card title="Workspace Events" icon="rss" href="https://developers.google.com/workspace/events">
+    Learn about Workspace Events API
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Persist subscriptions and data
+  </Card>
+</CardGroup>

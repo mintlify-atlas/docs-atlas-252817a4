@@ -1,0 +1,474 @@
+---
+title: Memory State Adapter
+description: In-memory state adapter for development and testing
+---
+
+The Memory state adapter stores subscriptions, locks, and cache in-process memory. Use this for local development and testing only — state is lost on restart and not shared across instances.
+
+<Warning>
+Never use MemoryStateAdapter in production. It logs a warning when `NODE_ENV=production`. Use [Redis](/state/redis) or [ioredis](/state/ioredis) for production deployments.
+</Warning>
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @chat-adapter/state-memory
+```
+
+```bash pnpm
+pnpm add @chat-adapter/state-memory
+```
+
+```bash yarn
+yarn add @chat-adapter/state-memory
+```
+</CodeGroup>
+
+## Basic Setup
+
+```typescript
+import { Chat } from 'chat';
+import { createMemoryState } from '@chat-adapter/state-memory';
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state: createMemoryState(),
+});
+```
+
+## Configuration
+
+### createMemoryState()
+
+Creates an in-memory state adapter. No configuration required.
+
+```typescript
+const state = createMemoryState();
+// No options needed
+```
+
+## When to Use
+
+<AccordionGroup>
+  <Accordion title="✅ Good for">
+    - **Local development** - Fast iteration without external dependencies
+    - **Unit tests** - Isolated test environments
+    - **Integration tests** - Predictable state for CI/CD
+    - **Demos and prototypes** - Quick proof-of-concepts
+  </Accordion>
+
+  <Accordion title="❌ Not suitable for">
+    - **Production** - State lost on restart
+    - **Serverless** - Each instance has separate state
+    - **Multi-instance deployments** - No shared state
+    - **Long-running subscriptions** - Subscriptions lost on redeploy
+  </Accordion>
+</AccordionGroup>
+
+## How It Works
+
+The adapter stores state in JavaScript data structures:
+
+```typescript
+private readonly subscriptions = new Set<string>();
+private readonly locks = new Map<string, MemoryLock>();
+private readonly cache = new Map<string, CachedValue>();
+```
+
+### Storage Lifecycle
+
+1. **Startup** - Data structures are empty
+2. **Runtime** - Subscriptions, locks, and cache accumulate in memory
+3. **Shutdown** - All state is lost (cleared on disconnect)
+4. **Restart** - Process starts fresh with empty state
+
+<Note>
+Unlike Redis adapters, MemoryStateAdapter does NOT persist state across restarts. Users will need to re-subscribe to threads after deployment.
+</Note>
+
+## Thread Subscriptions
+
+Subscriptions are stored in an in-memory Set:
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe(); // Adds threadId to Set
+  await thread.post('Watching this thread!');
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  // Only triggered if threadId is in subscriptions Set
+  await thread.post(`Got: ${message.text}`);
+});
+```
+
+### Subscription Behavior
+
+```typescript
+// Subscribe
+await thread.subscribe();
+await thread.isSubscribed(); // true
+
+// Restart bot
+// <All subscriptions lost>
+
+await thread.isSubscribed(); // false
+// User must @-mention bot again to re-subscribe
+```
+
+## Distributed Locking
+
+Locks are stored in an in-memory Map with automatic expiration:
+
+```typescript
+// Acquire lock
+const lock = await state.acquireLock(threadId, 30000);
+if (lock) {
+  try {
+    // Process message...
+  } finally {
+    await state.releaseLock(lock);
+  }
+}
+```
+
+### Lock Cleanup
+
+Expired locks are automatically cleaned:
+
+```typescript
+private cleanExpiredLocks(): void {
+  const now = Date.now();
+  for (const [threadId, lock] of this.locks) {
+    if (lock.expiresAt <= now) {
+      this.locks.delete(threadId);
+    }
+  }
+}
+```
+
+<Note>
+Memory locks work perfectly for single-instance development. In production with multiple instances, use Redis to share locks across processes.
+</Note>
+
+## Caching
+
+Cache entries support optional TTL:
+
+```typescript
+const state = chat.getState();
+
+// Store with 5-minute TTL
+await state.set('user:123:preferences', { theme: 'dark' }, 5 * 60 * 1000);
+
+// Retrieve (checks expiration)
+const prefs = await state.get<UserPreferences>('user:123:preferences');
+if (prefs) {
+  console.log(`Theme: ${prefs.theme}`);
+}
+
+// Delete
+await state.delete('user:123:preferences');
+```
+
+### Cache Storage
+
+```typescript
+interface CachedValue<T = unknown> {
+  value: T;
+  expiresAt: number | null; // null = no expiry
+}
+```
+
+Expired values are lazily cleaned on access:
+
+```typescript
+const cached = this.cache.get(key);
+if (cached?.expiresAt !== null && cached.expiresAt <= Date.now()) {
+  this.cache.delete(key); // Expired, remove it
+  return null;
+}
+```
+
+## Connection Management
+
+The adapter implements `connect()` and `disconnect()` for interface compatibility:
+
+```typescript
+const state = createMemoryState();
+await state.connect(); // No-op (logs warning in production)
+
+// Use state...
+
+await state.disconnect(); // Clears all data
+```
+
+### Production Warning
+
+When `NODE_ENV=production`:
+
+```
+[chat] MemoryStateAdapter is not recommended for production.
+Consider using @chat-adapter/state-redis instead.
+```
+
+## Testing Utilities
+
+The adapter exposes internal methods for testing:
+
+```typescript
+import { MemoryStateAdapter } from '@chat-adapter/state-memory';
+
+const state = new MemoryStateAdapter();
+await state.connect();
+
+await state.subscribe('thread-1');
+await state.subscribe('thread-2');
+
+const count = state._getSubscriptionCount(); // 2
+
+const lock = await state.acquireLock('thread-1', 5000);
+const lockCount = state._getLockCount(); // 1
+
+await state.releaseLock(lock!);
+state._getLockCount(); // 0
+```
+
+<Warning>
+These methods are prefixed with `_` to indicate they're for testing only. Do NOT use them in production code.
+</Warning>
+
+## Example: Unit Testing
+
+```typescript
+import { describe, it, expect, beforeEach } from 'vitest';
+import { Chat } from 'chat';
+import { createMemoryState } from '@chat-adapter/state-memory';
+import { createMockAdapter } from 'chat/mock-adapter';
+
+describe('Subscription handling', () => {
+  let chat: Chat;
+  let state: ReturnType<typeof createMemoryState>;
+
+  beforeEach(async () => {
+    state = createMemoryState();
+    await state.connect();
+
+    chat = new Chat({
+      userName: 'testbot',
+      adapters: { test: createMockAdapter('test') },
+      state,
+    });
+  });
+
+  it('subscribes to threads on mention', async () => {
+    const threadId = 'test:channel:thread';
+    const isSubscribed = await state.isSubscribed(threadId);
+    expect(isSubscribed).toBe(false);
+
+    // Simulate subscription
+    await state.subscribe(threadId);
+    expect(await state.isSubscribed(threadId)).toBe(true);
+  });
+
+  it('clears state on disconnect', async () => {
+    await state.subscribe('thread-1');
+    await state.set('key', 'value');
+
+    await state.disconnect();
+    await state.connect();
+
+    // All state cleared
+    expect(await state.isSubscribed('thread-1')).toBe(false);
+    expect(await state.get('key')).toBeNull();
+  });
+});
+```
+
+## Example: Integration Tests
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import { createMemoryState } from '@chat-adapter/state-memory';
+
+describe('Lock behavior', () => {
+  it('prevents concurrent lock acquisition', async () => {
+    const state = createMemoryState();
+    await state.connect();
+
+    const lock1 = await state.acquireLock('thread-1', 5000);
+    expect(lock1).not.toBeNull();
+
+    // Second acquisition fails
+    const lock2 = await state.acquireLock('thread-1', 5000);
+    expect(lock2).toBeNull();
+
+    // After release, can acquire again
+    await state.releaseLock(lock1!);
+    const lock3 = await state.acquireLock('thread-1', 5000);
+    expect(lock3).not.toBeNull();
+  });
+
+  it('automatically expires locks', async () => {
+    const state = createMemoryState();
+    await state.connect();
+
+    const lock = await state.acquireLock('thread-1', 100); // 100ms TTL
+    expect(lock).not.toBeNull();
+
+    // Wait for expiration
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    // Can acquire again (lock expired)
+    const newLock = await state.acquireLock('thread-1', 5000);
+    expect(newLock).not.toBeNull();
+  });
+});
+```
+
+## Limitations
+
+<AccordionGroup>
+  <Accordion title="No persistence">
+    State is lost on:
+    - Process restart
+    - Application redeploy
+    - Crash or unexpected shutdown
+
+    **Workaround:** Use Redis for production.
+  </Accordion>
+
+  <Accordion title="No cross-instance sharing">
+    Each process/instance has isolated state:
+    - Serverless functions don't share subscriptions
+    - Horizontal scaling creates separate state per replica
+    - Load balancers route to instances with different state
+
+    **Workaround:** Use Redis for shared state across instances.
+  </Accordion>
+
+  <Accordion title="Memory usage">
+    All state accumulates in memory:
+    - Subscriptions never expire (until disconnect)
+    - Cache entries with no TTL persist forever
+    - Long-running processes can grow memory
+
+    **Workaround:** Periodically call `disconnect()` and `connect()` to clear, or use Redis.
+  </Accordion>
+
+  <Accordion title="No TTL background cleanup">
+    Expired cache entries and locks are only cleaned:
+    - On access (lazy cleanup)
+    - When acquiring new locks
+
+    **Workaround:** This is fine for development. Redis handles TTL automatically.
+  </Accordion>
+</AccordionGroup>
+
+## Migration to Production
+
+When ready for production, swap to Redis:
+
+<Steps>
+  <Step title="Set up Redis">
+    Use a hosted provider (Vercel KV, Upstash, Railway) or run locally:
+    ```bash
+    docker run -d -p 6379:6379 redis:7-alpine
+    ```
+  </Step>
+
+  <Step title="Install Redis adapter">
+    ```bash
+    npm install @chat-adapter/state-redis
+    npm uninstall @chat-adapter/state-memory
+    ```
+  </Step>
+
+  <Step title="Update configuration">
+    ```typescript
+    // Before (development)
+    import { createMemoryState } from '@chat-adapter/state-memory';
+    const state = createMemoryState();
+
+    // After (production)
+    import { createRedisState } from '@chat-adapter/state-redis';
+    const state = createRedisState({ url: process.env.REDIS_URL });
+    ```
+  </Step>
+
+  <Step title="Set environment variable">
+    ```bash
+    export REDIS_URL=redis://localhost:6379
+    ```
+  </Step>
+
+  <Step title="Re-subscribe threads">
+    Existing in-memory subscriptions don't transfer. Users must @-mention your bot again.
+  </Step>
+</Steps>
+
+## Environment-Based Setup
+
+Use environment variables to switch adapters:
+
+```typescript
+import { Chat } from 'chat';
+import { createMemoryState } from '@chat-adapter/state-memory';
+import { createRedisState } from '@chat-adapter/state-redis';
+
+const state = process.env.REDIS_URL
+  ? createRedisState({ url: process.env.REDIS_URL })
+  : createMemoryState();
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state,
+});
+```
+
+Now:
+- **Local development** - No `REDIS_URL` → uses Memory
+- **Production** - `REDIS_URL` set → uses Redis
+
+## Debugging
+
+### View State Counts
+
+```typescript
+import type { MemoryStateAdapter } from '@chat-adapter/state-memory';
+
+const state = createMemoryState() as MemoryStateAdapter;
+await state.connect();
+
+// After some usage...
+console.log(`Subscriptions: ${state._getSubscriptionCount()}`);
+console.log(`Active locks: ${state._getLockCount()}`);
+```
+
+### Reset State
+
+```typescript
+// Clear all state without restarting
+await state.disconnect();
+await state.connect();
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Redis Adapter" icon="database" href="/state/redis">
+    Upgrade to production-ready Redis
+  </Card>
+  <Card title="State Overview" icon="database" href="/state">
+    Learn about subscriptions and locking
+  </Card>
+  <Card title="Testing" icon="flask" href="/testing">
+    Unit testing strategies
+  </Card>
+  <Card title="ioredis Adapter" icon="server" href="/state/ioredis">
+    Advanced Redis with Cluster support
+  </Card>
+</CardGroup>

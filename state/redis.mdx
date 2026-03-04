@@ -1,0 +1,547 @@
+---
+title: Redis State Adapter
+description: Production state adapter using the official redis package
+---
+
+The Redis state adapter provides persistent subscriptions and distributed locking using the official [redis](https://www.npmjs.com/package/redis) package. Recommended for production deployments.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @chat-adapter/state-redis
+```
+
+```bash pnpm
+pnpm add @chat-adapter/state-redis
+```
+
+```bash yarn
+yarn add @chat-adapter/state-redis
+```
+</CodeGroup>
+
+## Basic Setup
+
+```typescript
+import { Chat } from 'chat';
+import { createRedisState } from '@chat-adapter/state-redis';
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state: createRedisState({
+    url: process.env.REDIS_URL,
+  }),
+});
+```
+
+## Configuration
+
+### createRedisState(options)
+
+Creates a Redis state adapter instance.
+
+```typescript
+export interface RedisStateAdapterOptions {
+  /** Redis connection URL (e.g., redis://localhost:6379) */
+  url: string;
+  /** Key prefix for all Redis keys (default: "chat-sdk") */
+  keyPrefix?: string;
+  /** Logger instance for error reporting */
+  logger?: Logger;
+}
+```
+
+#### url
+
+**Required.** Redis connection URL in format:
+
+```
+redis://[[username][:password]@][host][:port][/db-number]
+```
+
+<CodeGroup>
+```typescript Local Development
+const state = createRedisState({
+  url: 'redis://localhost:6379',
+});
+```
+
+```typescript Production with Auth
+const state = createRedisState({
+  url: process.env.REDIS_URL, // redis://:password@host:port
+});
+```
+
+```typescript TLS (Vercel, Railway)
+const state = createRedisState({
+  url: process.env.REDIS_URL, // rediss://... (note the 's')
+});
+```
+</CodeGroup>
+
+#### keyPrefix
+
+Optional prefix for all Redis keys. Useful for:
+- Sharing Redis instance across multiple bots
+- Separating staging/production environments
+- Namespacing in multi-tenant scenarios
+
+```typescript
+const state = createRedisState({
+  url: process.env.REDIS_URL,
+  keyPrefix: 'mybot-prod', // default: "chat-sdk"
+});
+
+// Keys stored as:
+// mybot-prod:subscriptions
+// mybot-prod:lock:slack:C123:1234567890.123
+// mybot-prod:cache:user:123:preferences
+```
+
+#### logger
+
+Optional logger for error reporting. Defaults to console logger.
+
+```typescript
+import { ConsoleLogger } from 'chat';
+
+const state = createRedisState({
+  url: process.env.REDIS_URL,
+  logger: new ConsoleLogger('debug').child('redis'),
+});
+```
+
+## Environment Variables
+
+### REDIS_URL
+
+The `createRedisState()` helper automatically reads `REDIS_URL` if not provided:
+
+```typescript
+// These are equivalent:
+const state = createRedisState({ url: process.env.REDIS_URL });
+const state = createRedisState(); // Auto-reads REDIS_URL
+```
+
+<Warning>
+If `REDIS_URL` is not set and no `url` is provided, `createRedisState()` throws an error.
+</Warning>
+
+## Redis Key Structure
+
+The adapter uses the following key patterns:
+
+| Type | Pattern | Example | Description |
+|------|---------|---------|-------------|
+| Subscriptions | `{prefix}:subscriptions` | `chat-sdk:subscriptions` | Set of subscribed thread IDs |
+| Locks | `{prefix}:lock:{threadId}` | `chat-sdk:lock:slack:C123:1234567890.123` | String (lock token) with TTL |
+| Cache | `{prefix}:cache:{key}` | `chat-sdk:cache:user:123:prefs` | JSON string with optional TTL |
+
+### Example Redis Commands
+
+```bash
+# View all subscribed threads
+SMEMBERS chat-sdk:subscriptions
+
+# Check if thread is locked
+GET chat-sdk:lock:slack:C123:1234567890.123
+
+# View cached value
+GET chat-sdk:cache:user:123:preferences
+TTL chat-sdk:cache:user:123:preferences
+
+# View all keys
+KEYS chat-sdk:*
+```
+
+## Connection Management
+
+The adapter automatically connects when the Chat instance initializes. You typically don't need to manage connections manually.
+
+### Manual Connection
+
+```typescript
+const state = createRedisState({ url: process.env.REDIS_URL });
+await state.connect();
+
+// Use state...
+
+await state.disconnect();
+```
+
+### Connection Errors
+
+Connection errors are logged but don't crash your application:
+
+```typescript
+// Logs: "Redis client error: { error: ... }"
+state.on('error', (err) => {
+  console.error('Redis error:', err);
+});
+```
+
+<Note>
+The redis package automatically reconnects on network failures. Your bot will resume normal operation once Redis is reachable.
+</Note>
+
+## Thread Subscriptions
+
+Subscriptions are stored in a Redis Set for efficient membership checks.
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe(); // SADD chat-sdk:subscriptions {threadId}
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  // Checked via: SISMEMBER chat-sdk:subscriptions {threadId}
+  await thread.post(`Message received: ${message.text}`);
+});
+
+// Unsubscribe
+await thread.unsubscribe(); // SREM chat-sdk:subscriptions {threadId}
+```
+
+### Checking Subscription Status
+
+```typescript
+const isSubscribed = await thread.isSubscribed();
+if (isSubscribed) {
+  await thread.post('Still monitoring this thread!');
+}
+```
+
+## Distributed Locking
+
+Locks prevent concurrent message processing across serverless instances or webhook retries.
+
+### How Locks Work
+
+```typescript
+// Automatic locking (internal to Chat SDK)
+const lock = await state.acquireLock(threadId, 30000); // 30s TTL
+if (!lock) {
+  // Already locked by another instance
+  return;
+}
+
+try {
+  // Process message...
+} finally {
+  await state.releaseLock(lock);
+}
+```
+
+### Lock Implementation
+
+Locks use Redis `SET NX PX` for atomic acquisition:
+
+```redis
+SET chat-sdk:lock:{threadId} {token} NX PX {ttlMs}
+```
+
+**Properties:**
+- **NX** - Only set if key doesn't exist (atomic check-and-set)
+- **PX** - Expire after TTL milliseconds (auto-cleanup)
+- **Token** - Unique token ensures only lock holder can release
+
+### Extending Locks
+
+For long-running operations:
+
+```typescript
+const lock = await state.acquireLock(threadId, 30000);
+if (!lock) return;
+
+try {
+  // Start long operation...
+  
+  // Refresh TTL every 10 seconds
+  const interval = setInterval(async () => {
+    const extended = await state.extendLock(lock, 30000);
+    if (!extended) {
+      clearInterval(interval);
+      throw new Error('Lost lock ownership');
+    }
+  }, 10000);
+
+  await performLongTask();
+  clearInterval(interval);
+} finally {
+  await state.releaseLock(lock);
+}
+```
+
+<Warning>
+Locks auto-expire after TTL. Always set a TTL longer than your expected processing time, and use `extendLock()` for operations that might exceed it.
+</Warning>
+
+## Caching
+
+The cache API stores JSON-serialized values with optional TTL.
+
+```typescript
+const state = chat.getState();
+
+// Store with 10-minute TTL
+await state.set('user:123:preferences', {
+  theme: 'dark',
+  notifications: true,
+}, 10 * 60 * 1000);
+
+// Retrieve
+const prefs = await state.get<UserPreferences>('user:123:preferences');
+if (prefs) {
+  console.log(`Theme: ${prefs.theme}`);
+}
+
+// Store without TTL (persist forever)
+await state.set('config:version', '1.2.3');
+
+// Delete
+await state.delete('user:123:preferences');
+```
+
+### Serialization
+
+Values are automatically JSON-serialized:
+
+```typescript
+// Objects
+await state.set('key', { foo: 'bar' });
+const obj = await state.get<{ foo: string }>('key'); // { foo: 'bar' }
+
+// Arrays
+await state.set('key', [1, 2, 3]);
+const arr = await state.get<number[]>('key'); // [1, 2, 3]
+
+// Primitives
+await state.set('key', 'hello');
+const str = await state.get<string>('key'); // 'hello'
+```
+
+<Note>
+Non-JSON values (functions, symbols) will be lost during serialization. Use plain objects and primitives.
+</Note>
+
+## Advanced Usage
+
+### Accessing the Redis Client
+
+For advanced Redis operations:
+
+```typescript
+import { RedisStateAdapter } from '@chat-adapter/state-redis';
+
+const state = createRedisState({ url: process.env.REDIS_URL });
+await state.connect();
+
+const client = (state as RedisStateAdapter).getClient();
+
+// Use any redis command
+await client.incr('custom:counter');
+const count = await client.get('custom:counter');
+```
+
+### Custom Key Prefix
+
+Separate environments using different prefixes:
+
+```typescript
+const prodState = createRedisState({
+  url: process.env.REDIS_URL,
+  keyPrefix: 'mybot-prod',
+});
+
+const stagingState = createRedisState({
+  url: process.env.REDIS_URL,
+  keyPrefix: 'mybot-staging',
+});
+```
+
+## Deployment Examples
+
+<CodeGroup>
+```typescript Vercel
+// Deploy with Vercel Redis (KV)
+export default async function handler(req: Request) {
+  const chat = new Chat({
+    userName: 'mybot',
+    adapters: { /* ... */ },
+    state: createRedisState(), // Reads REDIS_URL from env
+  });
+
+  return chat.webhooks.slack(req);
+}
+```
+
+```typescript Railway
+// Railway auto-provides REDIS_URL
+import { Chat } from 'chat';
+import { createRedisState } from '@chat-adapter/state-redis';
+
+const chat = new Chat({
+  userName: 'mybot',
+  adapters: { /* ... */ },
+  state: createRedisState(), // Auto-reads REDIS_URL
+});
+```
+
+```typescript Docker Compose
+// docker-compose.yml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  
+  bot:
+    build: .
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+```
+</CodeGroup>
+
+## Monitoring
+
+### Key Metrics to Track
+
+```typescript
+// Subscription count
+const count = await client.sCard('chat-sdk:subscriptions');
+console.log(`Active subscriptions: ${count}`);
+
+// Active locks
+const locks = await client.keys('chat-sdk:lock:*');
+console.log(`Active locks: ${locks.length}`);
+
+// Cache size
+const cached = await client.keys('chat-sdk:cache:*');
+console.log(`Cached keys: ${cached.length}`);
+```
+
+### Health Check
+
+```typescript
+import { RedisStateAdapter } from '@chat-adapter/state-redis';
+
+export async function healthCheck(): Promise<boolean> {
+  const state = createRedisState({ url: process.env.REDIS_URL });
+  
+  try {
+    await state.connect();
+    await state.set('health', Date.now(), 5000); // 5s TTL
+    const value = await state.get('health');
+    await state.disconnect();
+    return value !== null;
+  } catch {
+    return false;
+  }
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Redis url is required">
+    The `REDIS_URL` environment variable is not set.
+
+    **Solution:**
+    ```bash
+    export REDIS_URL=redis://localhost:6379
+    ```
+
+    Or provide it explicitly:
+    ```typescript
+    createRedisState({ url: 'redis://localhost:6379' })
+    ```
+  </Accordion>
+
+  <Accordion title="Error: RedisStateAdapter is not connected">
+    You're calling state methods before `connect()` is called.
+
+    **Solution:**
+    The Chat SDK calls `connect()` automatically. If using the adapter directly:
+    ```typescript
+    await state.connect();
+    await state.subscribe(threadId);
+    ```
+  </Accordion>
+
+  <Accordion title="Locks are expiring too quickly">
+    Your message handlers are taking longer than the default 30s lock TTL.
+
+    **Solution:**
+    Use `extendLock()` to refresh the TTL during long operations, or increase the initial TTL in your custom locking logic.
+  </Accordion>
+
+  <Accordion title="Subscriptions lost after restart">
+    This is normal with MemoryStateAdapter. With RedisStateAdapter, subscriptions persist.
+
+    **Solution:**
+    Verify you're using `@chat-adapter/state-redis` (not `@chat-adapter/state-memory`):
+    ```typescript
+    import { createRedisState } from '@chat-adapter/state-redis';
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Migration from Memory Adapter
+
+<Steps>
+  <Step title="Install Redis adapter">
+    ```bash
+    npm install @chat-adapter/state-redis
+    ```
+  </Step>
+
+  <Step title="Set up Redis">
+    Use a hosted Redis provider (Vercel KV, Upstash, Railway) or run locally:
+    ```bash
+    docker run -d -p 6379:6379 redis:7-alpine
+    ```
+  </Step>
+
+  <Step title="Update configuration">
+    ```typescript
+    // Before
+    import { createMemoryState } from '@chat-adapter/state-memory';
+    const state = createMemoryState();
+
+    // After
+    import { createRedisState } from '@chat-adapter/state-redis';
+    const state = createRedisState({ url: process.env.REDIS_URL });
+    ```
+  </Step>
+
+  <Step title="Set environment variable">
+    ```bash
+    export REDIS_URL=redis://localhost:6379
+    ```
+  </Step>
+
+  <Step title="Re-subscribe threads">
+    Existing subscriptions from memory are lost. Users will need to @-mention your bot again to re-subscribe.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="ioredis Adapter" icon="server" href="/state/ioredis">
+    Use ioredis for Cluster or Sentinel
+  </Card>
+  <Card title="State Overview" icon="database" href="/state">
+    Learn about subscriptions and locking
+  </Card>
+  <Card title="Thread API" icon="comments" href="/api/thread">
+    Explore thread.subscribe() and state methods
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/deployment">
+    Production deployment guides
+  </Card>
+</CardGroup>

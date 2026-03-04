@@ -1,0 +1,518 @@
+---
+title: Markdown Utilities
+description: API reference for markdown parsing, conversion, and AST manipulation
+---
+
+The Chat SDK uses [mdast](https://github.com/syntax-tree/mdast) (Markdown Abstract Syntax Tree) as the canonical format for message formatting. This enables consistent cross-platform formatting and programmatic content manipulation.
+
+## Parsing and Stringifying
+
+### parseMarkdown
+
+Parse markdown string into an mdast AST.
+
+```typescript
+function parseMarkdown(markdown: string): Root;
+```
+
+**Example:**
+
+```typescript
+import { parseMarkdown } from "chat";
+
+const ast = parseMarkdown("**Bold** and _italic_");
+console.log(ast);
+// {
+//   type: "root",
+//   children: [
+//     {
+//       type: "paragraph",
+//       children: [
+//         { type: "strong", children: [{ type: "text", value: "Bold" }] },
+//         { type: "text", value: " and " },
+//         { type: "emphasis", children: [{ type: "text", value: "italic" }] }
+//       ]
+//     }
+//   ]
+// }
+```
+
+### stringifyMarkdown
+
+Stringify an mdast AST back to markdown.
+
+```typescript
+function stringifyMarkdown(ast: Root): string;
+```
+
+**Example:**
+
+```typescript
+import { stringifyMarkdown, root, paragraph, strong, text } from "chat";
+
+const ast = root([
+  paragraph([
+    strong([text("Bold")]),
+    text(" text")
+  ])
+]);
+
+const markdown = stringifyMarkdown(ast);
+console.log(markdown); // "**Bold** text\n"
+```
+
+## Text Extraction
+
+### toPlainText
+
+Extract plain text from an AST (strips all formatting).
+
+```typescript
+function toPlainText(ast: Root): string;
+```
+
+**Example:**
+
+```typescript
+import { parseMarkdown, toPlainText } from "chat";
+
+const ast = parseMarkdown("**Bold** and _italic_");
+const plain = toPlainText(ast);
+console.log(plain); // "Bold and italic"
+```
+
+### markdownToPlainText
+
+Extract plain text from a markdown string.
+
+```typescript
+function markdownToPlainText(markdown: string): string;
+```
+
+**Example:**
+
+```typescript
+import { markdownToPlainText } from "chat";
+
+const plain = markdownToPlainText("**Bold** [link](url)");
+console.log(plain); // "Bold link"
+```
+
+## AST Node Builders
+
+Helper functions for creating mdast nodes programmatically.
+
+### root
+
+Create a root node (top-level AST container).
+
+```typescript
+function root(children: Content[]): Root;
+```
+
+### paragraph
+
+Create a paragraph node.
+
+```typescript
+function paragraph(children: Content[]): Paragraph;
+```
+
+### text
+
+Create a text node.
+
+```typescript
+function text(value: string): Text;
+```
+
+### strong
+
+Create a strong (bold) node.
+
+```typescript
+function strong(children: Content[]): Strong;
+```
+
+### emphasis
+
+Create an emphasis (italic) node.
+
+```typescript
+function emphasis(children: Content[]): Emphasis;
+```
+
+### strikethrough
+
+Create a delete (strikethrough) node.
+
+```typescript
+function strikethrough(children: Content[]): Delete;
+```
+
+### inlineCode
+
+Create an inline code node.
+
+```typescript
+function inlineCode(value: string): InlineCode;
+```
+
+### codeBlock
+
+Create a code block node.
+
+```typescript
+function codeBlock(value: string, lang?: string): Code;
+```
+
+### link
+
+Create a link node.
+
+```typescript
+function link(url: string, children: Content[], title?: string): Link;
+```
+
+### blockquote
+
+Create a blockquote node.
+
+```typescript
+function blockquote(children: Content[]): Blockquote;
+```
+
+**Example:**
+
+```typescript
+import {
+  root,
+  paragraph,
+  text,
+  strong,
+  emphasis,
+  link,
+  codeBlock
+} from "chat";
+
+const ast = root([
+  paragraph([
+    text("This is "),
+    strong([text("bold")]),
+    text(" and "),
+    emphasis([text("italic")]),
+    text(". "),
+    link("https://example.com", [text("Click here")])
+  ]),
+  codeBlock("console.log('hello');", "javascript")
+]);
+
+await thread.post({ ast });
+```
+
+## AST Manipulation
+
+### walkAst
+
+Walk the AST and transform nodes.
+
+```typescript
+function walkAst<T extends Content | Root>(
+  node: T,
+  visitor: (node: Content) => Content | null
+): T;
+```
+
+The visitor function receives each node and can:
+- Return the node unchanged
+- Return a modified node
+- Return `null` to remove the node
+
+**Example - Remove all links:**
+
+```typescript
+import { parseMarkdown, walkAst, isLinkNode } from "chat";
+
+const ast = parseMarkdown("Check out [this link](https://example.com)!");
+
+const withoutLinks = walkAst(ast, (node) => {
+  if (isLinkNode(node)) {
+    // Replace link with its text content
+    return node.children[0];
+  }
+  return node;
+});
+```
+
+**Example - Transform code blocks:**
+
+```typescript
+import { parseMarkdown, walkAst, isCodeNode, codeBlock } from "chat";
+
+const ast = parseMarkdown("```\ncode\n```");
+
+const highlighted = walkAst(ast, (node) => {
+  if (isCodeNode(node)) {
+    return codeBlock(
+      highlightSyntax(node.value, node.lang),
+      node.lang
+    );
+  }
+  return node;
+});
+```
+
+## Type Guards
+
+Type guards for identifying node types.
+
+```typescript
+function isTextNode(node: Content): node is Text;
+function isParagraphNode(node: Content): node is Paragraph;
+function isStrongNode(node: Content): node is Strong;
+function isEmphasisNode(node: Content): node is Emphasis;
+function isDeleteNode(node: Content): node is Delete;
+function isInlineCodeNode(node: Content): node is InlineCode;
+function isCodeNode(node: Content): node is Code;
+function isLinkNode(node: Content): node is Link;
+function isBlockquoteNode(node: Content): node is Blockquote;
+function isListNode(node: Content): node is List;
+function isListItemNode(node: Content): node is ListItem;
+function isTableNode(node: Content): node is Table;
+function isTableRowNode(node: Content): node is TableRow;
+function isTableCellNode(node: Content): node is TableCell;
+```
+
+**Example:**
+
+```typescript
+import { parseMarkdown, walkAst, isLinkNode, isCodeNode } from "chat";
+
+const ast = parseMarkdown("[link](url) and `code`");
+
+walkAst(ast, (node) => {
+  if (isLinkNode(node)) {
+    console.log("Found link:", node.url);
+  }
+  if (isCodeNode(node)) {
+    console.log("Found code:", node.value);
+  }
+  return node;
+});
+```
+
+## Node Property Helpers
+
+### getNodeChildren
+
+Get children from a content node that has children. Returns empty array for nodes without children.
+
+```typescript
+function getNodeChildren(node: Content): Content[];
+```
+
+### getNodeValue
+
+Get value from a content node that has a value property. Returns empty string for nodes without value.
+
+```typescript
+function getNodeValue(node: Content): string;
+```
+
+**Example:**
+
+```typescript
+import { parseMarkdown, walkAst, getNodeChildren, getNodeValue } from "chat";
+
+const ast = parseMarkdown("**bold** text");
+
+walkAst(ast, (node) => {
+  const children = getNodeChildren(node);
+  const value = getNodeValue(node);
+  
+  if (children.length > 0) {
+    console.log("Has", children.length, "children");
+  }
+  if (value) {
+    console.log("Has value:", value);
+  }
+  
+  return node;
+});
+```
+
+## Table Utilities
+
+### tableToAscii
+
+Render an mdast table node as a padded ASCII table string.
+
+```typescript
+function tableToAscii(node: Table): string;
+```
+
+**Output format:**
+
+```
+Name  | Age | Role
+------|-----|--------
+Alice | 30  | Engineer
+Bob   | 25  | Designer
+```
+
+### tableElementToAscii
+
+Render a table from headers and string rows as a padded ASCII table.
+
+```typescript
+function tableElementToAscii(
+  headers: string[],
+  rows: string[][]
+): string;
+```
+
+**Example:**
+
+```typescript
+import { tableElementToAscii } from "chat";
+
+const ascii = tableElementToAscii(
+  ["Name", "Score"],
+  [
+    ["Alice", "95"],
+    ["Bob", "87"]
+  ]
+);
+
+console.log(ascii);
+// Name  | Score
+// ------|------
+// Alice | 95
+// Bob   | 87
+```
+
+## FormatConverter
+
+Interface for platform-specific format converters. Each adapter implements this to convert between platform format and mdast AST.
+
+```typescript
+interface FormatConverter {
+  /**
+   * Parse platform's native format into an AST.
+   * This is the primary method used when receiving messages.
+   */
+  toAst(platformText: string): Root;
+  
+  /**
+   * Render an AST to the platform's native format.
+   * This is the primary method used when sending messages.
+   */
+  fromAst(ast: Root): string;
+  
+  /**
+   * Extract plain text from platform format.
+   * Convenience method - default implementation uses toAst + toPlainText.
+   */
+  extractPlainText(platformText: string): string;
+}
+```
+
+### BaseFormatConverter
+
+Base class for format converters with default implementations.
+
+```typescript
+abstract class BaseFormatConverter implements FormatConverter {
+  abstract toAst(platformText: string): Root;
+  abstract fromAst(ast: Root): string;
+  
+  extractPlainText(platformText: string): string;
+  
+  // Convenience methods
+  fromMarkdown(markdown: string): string;
+  toMarkdown(platformText: string): string;
+  renderPostable(message: PostableMessage): string;
+}
+```
+
+**Example - Custom Converter:**
+
+```typescript
+import { BaseFormatConverter, Root, Content, text, paragraph } from "chat";
+
+class MyConverter extends BaseFormatConverter {
+  toAst(platformText: string): Root {
+    // Parse platform format to AST
+    return {
+      type: "root",
+      children: [paragraph([text(platformText)])]
+    };
+  }
+  
+  fromAst(ast: Root): string {
+    // Convert AST to platform format
+    return ast.children
+      .map(node => this.nodeToString(node))
+      .join("\n\n");
+  }
+  
+  private nodeToString(node: Content): string {
+    // Convert individual nodes
+    // ...
+  }
+}
+```
+
+## Complete Example
+
+```typescript
+import {
+  parseMarkdown,
+  stringifyMarkdown,
+  walkAst,
+  isLinkNode,
+  isCodeNode,
+  root,
+  paragraph,
+  text,
+  strong,
+  link,
+  codeBlock
+} from "chat";
+
+// Parse markdown
+const ast = parseMarkdown(`
+# Hello
+
+This is **bold** and [a link](https://example.com).
+
+\`\`\`js
+console.log('code');
+\`\`\`
+`);
+
+// Transform: remove links, highlight code
+const transformed = walkAst(ast, (node) => {
+  // Remove all links, keep text
+  if (isLinkNode(node)) {
+    return text(node.children[0].value);
+  }
+  
+  // Add line numbers to code blocks
+  if (isCodeNode(node)) {
+    const lines = node.value.split("\n");
+    const numbered = lines
+      .map((line, i) => `${i + 1}: ${line}`)
+      .join("\n");
+    return codeBlock(numbered, node.lang);
+  }
+  
+  return node;
+});
+
+// Convert back to markdown
+const markdown = stringifyMarkdown(transformed);
+
+// Or post directly
+await thread.post({ ast: transformed });
+```

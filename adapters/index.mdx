@@ -1,0 +1,182 @@
+---
+title: Adapters Overview
+description: Connect the Chat SDK to multiple messaging platforms with platform adapters
+---
+
+Adapters are platform-specific implementations that connect the Chat SDK to messaging platforms. Each adapter handles:
+
+- **Webhook verification** - Validates incoming requests from the platform
+- **Message parsing** - Converts platform-specific formats to normalized SDK messages
+- **API calls** - Posts messages, adds reactions, manages threads
+- **Format conversion** - Transforms markdown/text between platform formats
+
+## Available Adapters
+
+<CardGroup cols={2}>
+  <Card title="Slack" icon="slack" href="/adapters/slack">
+    Connect to Slack workspaces with full multi-workspace support
+  </Card>
+  <Card title="Microsoft Teams" icon="microsoft" href="/adapters/teams">
+    Integrate with Teams channels and DMs via Bot Framework
+  </Card>
+  <Card title="Google Chat" icon="google" href="/adapters/gchat">
+    Build bots for Google Chat spaces with Workspace Events
+  </Card>
+  <Card title="Discord" icon="discord" href="/adapters/discord">
+    Create Discord bots using HTTP Interactions or Gateway
+  </Card>
+  <Card title="Telegram" icon="telegram" href="/adapters/telegram">
+    Build Telegram bots with webhook or long polling modes
+  </Card>
+  <Card title="GitHub" icon="github" href="/adapters/github">
+    Respond to PR comments and review threads
+  </Card>
+  <Card title="Linear" icon="linear" href="/adapters/linear">
+    Comment on Linear issues and participate in threads
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+<Steps>
+  <Step title="Install adapter">
+    Choose the platform adapter you need:
+    ```bash
+    npm install @chat-adapter/slack
+    ```
+  </Step>
+  
+  <Step title="Create adapter instance">
+    Configure with your platform credentials:
+    ```typescript
+    import { createSlackAdapter } from '@chat-adapter/slack';
+    
+    const slack = createSlackAdapter({
+      botToken: process.env.SLACK_BOT_TOKEN!,
+      signingSecret: process.env.SLACK_SIGNING_SECRET!,
+    });
+    ```
+  </Step>
+  
+  <Step title="Add to Chat SDK">
+    Initialize the Chat SDK with your adapter:
+    ```typescript
+    import { Chat } from 'chat';
+    
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: { slack },
+      state: new MemoryState(),
+    });
+    
+    await chat.initialize();
+    ```
+  </Step>
+  
+  <Step title="Handle webhooks">
+    Route platform webhooks to your adapter:
+    ```typescript
+    app.post('/webhooks/slack', async (req, res) => {
+      const response = await slack.handleWebhook(req);
+      res.status(response.status).send(response.body);
+    });
+    ```
+  </Step>
+</Steps>
+
+## Common Configuration
+
+All adapters share these common configuration options:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `logger` | `Logger` | Logger instance for debugging and error tracking |
+| `userName` | `string` | Bot username for mention detection |
+
+## Platform-Specific Features
+
+Each platform has unique capabilities:
+
+- **Multi-workspace** - Slack, Teams (Azure AD multi-tenant), GitHub (app installations)
+- **Threading** - All platforms support thread/conversation isolation
+- **Reactions** - Slack, Discord, Teams, GitHub, Linear, Telegram
+- **Cards/Rich UI** - Slack (Block Kit), Teams (Adaptive Cards), Google Chat (Cards v2)
+- **Files** - Slack, Discord, Teams, Telegram
+- **Typing indicators** - Slack, Discord, Teams, Telegram
+
+## Thread ID Format
+
+Each adapter uses a consistent thread ID format:
+
+```
+{platform}:{channel}:{thread}
+```
+
+Examples:
+- Slack: `slack:C123ABC:1234567890.123456`
+- Teams: `teams:{base64(conversationId)}:{base64(serviceUrl)}`
+- Discord: `discord:@me:123456789` (DM)
+- Google Chat: `gchat:spaces/ABC123:threads/xyz`
+- Telegram: `telegram:123456789` (chat ID)
+- GitHub: `github:owner/repo:42` (PR #42)
+- Linear: `linear:ISSUE-123:c:comment-id` (comment thread)
+
+## Authentication Modes
+
+Adapters support different authentication methods:
+
+### Single-tenant
+One bot instance, one workspace/organization:
+- Fixed credentials in environment variables
+- Simpler setup, good for internal tools
+
+### Multi-tenant
+One bot, multiple workspaces/organizations:
+- OAuth flow for user installation
+- Installation data stored in StateAdapter
+- Required for public apps
+
+<Note>
+  See individual adapter docs for platform-specific authentication details.
+</Note>
+
+## Error Handling
+
+All adapters use standardized error types from `@chat-adapter/shared`:
+
+- `ValidationError` - Invalid input or configuration
+- `AuthenticationError` - Invalid credentials
+- `PermissionError` - Missing scopes or permissions
+- `NetworkError` - API request failed
+- `AdapterRateLimitError` - Rate limit exceeded
+- `ResourceNotFoundError` - Message/thread not found
+
+```typescript
+import { AdapterRateLimitError } from '@chat-adapter/shared';
+
+try {
+  await thread.post('Hello!');
+} catch (error) {
+  if (error instanceof AdapterRateLimitError) {
+    // Wait and retry
+    await new Promise(r => setTimeout(r, error.retryAfter * 1000));
+  }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Choose Your Platform" icon="rocket">
+    Pick an adapter from the list above and follow its setup guide
+  </Card>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Learn how to process and respond to messages
+  </Card>
+  <Card title="Cards & Rich UI" icon="sparkles" href="/features/cards">
+    Build interactive cards for supported platforms
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Store subscriptions and bot data across requests
+  </Card>
+</CardGroup>

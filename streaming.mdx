@@ -1,0 +1,379 @@
+---
+title: AI Streaming Support
+description: Stream AI-generated responses with native platform support or fallback rendering
+---
+
+The Chat SDK provides first-class support for streaming AI-generated text from libraries like the Vercel AI SDK, with platform-native streaming on Slack and graceful fallback for other platforms.
+
+## Basic Streaming
+
+Simply pass an `AsyncIterable<string>` to `thread.post()`:
+
+```typescript
+import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+chat.onSubscribedMessage(async (thread, message) => {
+  // Stream from AI SDK
+  const result = streamText({
+    model: openai("gpt-4-turbo"),
+    prompt: message.text,
+  });
+  
+  // Post the stream - SDK handles everything
+  await thread.post(result.textStream);
+});
+```
+
+## Platform Support
+
+<CardGroup cols={2}>
+  <Card title="Slack" icon="slack">
+    **Native streaming** via Assistants API - smooth character-by-character updates
+  </Card>
+  <Card title="Google Chat" icon="google">
+    **Fallback mode** - post + edit with throttling (500ms default)
+  </Card>
+  <Card title="Teams" icon="microsoft">
+    **Fallback mode** - post + edit with throttling (500ms default)
+  </Card>
+  <Card title="Discord" icon="discord">
+    **Fallback mode** - post + edit with throttling (500ms default)
+  </Card>
+</CardGroup>
+
+## How It Works
+
+### Native Streaming (Slack)
+
+When the adapter supports native streaming:
+
+```typescript
+// From thread.ts
+if (this.adapter.stream) {
+  let accumulated = "";
+  const wrappedStream: AsyncIterable<string> = {
+    [Symbol.asyncIterator]: () => {
+      const iterator = textStream[Symbol.asyncIterator]();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done) {
+            accumulated += result.value;
+          }
+          return result;
+        },
+      };
+    },
+  };
+
+  const raw = await this.adapter.stream(this.id, wrappedStream, options);
+  return this.createSentMessage(raw.id, { markdown: accumulated }, raw.threadId);
+}
+```
+
+Slack's streaming API updates the message in real-time as tokens arrive.
+
+### Fallback Streaming (Other Platforms)
+
+For platforms without native support, the SDK uses post + edit:
+
+```typescript
+// From thread.ts
+private async fallbackStream(
+  textStream: AsyncIterable<string>,
+  options?: StreamOptions
+): Promise<SentMessage> {
+  const intervalMs = options?.updateIntervalMs ?? this._streamingUpdateIntervalMs;
+  const placeholderText = this._fallbackStreamingPlaceholderText;
+  
+  // Post initial placeholder (or wait for first chunk)
+  let msg = placeholderText === null
+    ? null
+    : await this.adapter.postMessage(this.id, placeholderText);
+  
+  const renderer = new StreamingMarkdownRenderer();
+  let lastEditContent = "";
+  
+  // Consume stream and update message periodically
+  for await (const chunk of textStream) {
+    renderer.push(chunk);
+    
+    if (!msg) {
+      // First chunk - post initial message
+      const content = renderer.render();
+      msg = await this.adapter.postMessage(this.id, { markdown: content });
+      lastEditContent = content;
+    }
+  }
+  
+  // Final edit with complete text
+  const accumulated = renderer.getText();
+  const finalContent = renderer.finish();
+  
+  if (finalContent !== lastEditContent) {
+    await this.adapter.editMessage(threadId, msg.id, { markdown: accumulated });
+  }
+  
+  return this.createSentMessage(msg.id, { markdown: accumulated }, threadId);
+}
+```
+
+## Streaming Markdown Renderer
+
+The SDK includes a sophisticated streaming markdown renderer that handles:
+
+- **Table buffering** - Holds back potential table headers until confirmed by separator line
+- **Inline marker balancing** - Prevents unclosed `**`, `*`, `~~`, `` ` ``, `[` from appearing mid-stream
+- **Code fence tracking** - Detects when inside code blocks to avoid processing markdown inside them
+
+```typescript
+// From streaming-markdown.ts
+export class StreamingMarkdownRenderer {
+  private accumulated = "";
+  private fenceToggles = 0;
+  private incompleteLine = "";
+  
+  push(chunk: string): void {
+    this.accumulated += chunk;
+    
+    // Track code fence state incrementally
+    this.incompleteLine += chunk;
+    const parts = this.incompleteLine.split("\n");
+    this.incompleteLine = parts.pop() ?? "";
+    
+    for (const line of parts) {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+        this.fenceToggles++;
+      }
+    }
+  }
+  
+  render(): string {
+    // Hold back unconfirmed table headers
+    const committable = getCommittablePrefix(this.accumulated);
+    return remend(committable); // Close incomplete inline markers
+  }
+}
+```
+
+### Table Buffering Example
+
+Without buffering, tables would flash as raw pipe-delimited text:
+
+```markdown
+| Name | Age    <- Held back (might not be a table)
+| Name | Age |  <- Still held back
+| Name | Age |
+|------|----  <- Separator confirms table, release all rows
+```
+
+### Inline Marker Balancing
+
+Prevents broken formatting mid-stream:
+
+```markdown
+This is **bold text that is still being typ  <- Held back
+This is **bold text that is still being typed**  <- Released
+```
+
+## Configuration Options
+
+### Update Interval (Fallback Mode)
+
+Control how often edits are sent:
+
+```typescript
+const chat = new Chat({
+  adapters: { slack: slackAdapter },
+  state: redisState,
+  userName: "mybot",
+  
+  // Update every 1000ms instead of default 500ms
+  streamingUpdateIntervalMs: 1000,
+});
+```
+
+<Warning>
+Lower intervals = smoother updates but higher rate limit risk. Higher intervals = choppier updates but safer.
+</Warning>
+
+### Placeholder Text
+
+Customize the initial placeholder (or disable it):
+
+```typescript
+const chat = new Chat({
+  adapters: { slack: slackAdapter },
+  state: redisState,
+  userName: "mybot",
+  
+  // Custom placeholder
+  fallbackStreamingPlaceholderText: "Thinking...",
+  
+  // Or disable placeholder - wait for first chunk
+  // fallbackStreamingPlaceholderText: null,
+});
+```
+
+## Streaming with Context
+
+The SDK automatically extracts user/team context for Slack's streaming API:
+
+```typescript
+// From thread.ts
+private async handleStream(
+  textStream: AsyncIterable<string>
+): Promise<SentMessage> {
+  const options: StreamOptions = {};
+  
+  // Extract from current message context
+  if (this._currentMessage) {
+    options.recipientUserId = this._currentMessage.author.userId;
+    const raw = this._currentMessage.raw as { team_id?: string; team?: string };
+    options.recipientTeamId = raw?.team_id ?? raw?.team;
+  }
+  
+  if (this.adapter.stream) {
+    return this.adapter.stream(this.id, textStream, options);
+  }
+  
+  return this.fallbackStream(textStream, options);
+}
+```
+
+## Advanced: Streaming to Channels
+
+When streaming to a channel (not a thread), the SDK accumulates text before posting:
+
+```typescript
+// From channel.ts
+async post(
+  message: string | PostableMessage | CardJSXElement
+): Promise<SentMessage> {
+  // Handle AsyncIterable (streaming) — accumulate first
+  if (isAsyncIterable(message)) {
+    let accumulated = "";
+    for await (const chunk of message) {
+      accumulated += chunk;
+    }
+    return this.postSingleMessage(accumulated);
+  }
+  
+  // ... regular posting
+}
+```
+
+<Info>
+Channel-level streaming doesn't support incremental updates - the full response is posted once complete.
+</Info>
+
+## Example: AI Chat Bot
+
+```typescript
+import { streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+interface ConversationState {
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+}
+
+chat.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await thread.setState({ 
+    messages: [{ role: "user", content: message.text }] 
+  });
+  
+  await thread.startTyping("Thinking...");
+  
+  const result = streamText({
+    model: openai("gpt-4-turbo"),
+    messages: [{ role: "user", content: message.text }],
+  });
+  
+  const response = await thread.post(result.textStream);
+  
+  // Update state with assistant response
+  const state = await thread.state as ConversationState;
+  await thread.setState({
+    messages: [
+      ...state.messages,
+      { role: "assistant", content: response.text }
+    ]
+  });
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  const state = await thread.state as ConversationState;
+  
+  // Add user message to history
+  const updatedMessages = [
+    ...state.messages,
+    { role: "user", content: message.text }
+  ];
+  
+  await thread.setState({ messages: updatedMessages });
+  await thread.startTyping();
+  
+  const result = streamText({
+    model: openai("gpt-4-turbo"),
+    messages: updatedMessages,
+  });
+  
+  const response = await thread.post(result.textStream);
+  
+  // Add assistant response
+  await thread.setState({
+    messages: [
+      ...updatedMessages,
+      { role: "assistant", content: response.text }
+    ]
+  });
+});
+```
+
+## Performance Considerations
+
+### Rate Limits
+
+<CardGroup cols={2}>
+  <Card title="Slack Native Streaming">
+    No additional rate limits - uses dedicated streaming API
+  </Card>
+  <Card title="Fallback Mode">
+    Each edit counts against platform rate limits. Adjust `streamingUpdateIntervalMs` if you hit limits.
+  </Card>
+</CardGroup>
+
+### Edit Scheduling
+
+The fallback renderer uses recursive setTimeout to avoid overwhelming slow services:
+
+```typescript
+// From thread.ts
+const scheduleNextEdit = (): void => {
+  timerId = setTimeout(() => {
+    pendingEdit = doEditAndReschedule();
+  }, intervalMs);
+};
+
+const doEditAndReschedule = async (): Promise<void> => {
+  if (stopped || !msg) return;
+  
+  const content = renderer.render();
+  if (content !== lastEditContent) {
+    await this.adapter.editMessage(threadId, msg.id, { markdown: content });
+    lastEditContent = content;
+  }
+  
+  // Schedule next check AFTER edit completes
+  if (!stopped) {
+    scheduleNextEdit();
+  }
+};
+```
+
+<Tip>
+Edits are scheduled **after** the previous edit completes, preventing request buildup during slow responses.
+</Tip>

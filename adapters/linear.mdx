@@ -1,0 +1,394 @@
+---
+title: Linear Adapter
+description: Comment on Linear issues and participate in comment threads
+---
+
+## Installation
+
+```bash
+npm install @chat-adapter/linear
+```
+
+## Environment Variables
+
+<Note>
+  Get your credentials from [Linear API Settings](https://linear.app/settings/api).
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `LINEAR_API_KEY` | API Key mode | Personal API key from Linear |
+| `LINEAR_ACCESS_TOKEN` | OAuth mode | OAuth access token |
+| `LINEAR_CLIENT_ID` | App mode | OAuth client ID |
+| `LINEAR_CLIENT_SECRET` | App mode | OAuth client secret |
+| `LINEAR_WEBHOOK_SECRET` | Yes | Webhook secret for signature verification |
+| `LINEAR_BOT_USERNAME` | Optional | Bot username for display |
+
+## Configuration Options
+
+```typescript
+type LinearAdapterConfig = 
+  | LinearAdapterAPIKeyConfig
+  | LinearAdapterOAuthConfig
+  | LinearAdapterAppConfig;
+
+// Personal API Key
+interface LinearAdapterAPIKeyConfig {
+  apiKey: string;
+  webhookSecret: string;
+  userName: string;
+  logger: Logger;
+}
+
+// OAuth Access Token
+interface LinearAdapterOAuthConfig {
+  accessToken: string;
+  webhookSecret: string;
+  userName: string;
+  logger: Logger;
+}
+
+// Client Credentials (OAuth App)
+interface LinearAdapterAppConfig {
+  clientId: string;
+  clientSecret: string;
+  webhookSecret: string;
+  userName: string;
+  logger: Logger;
+}
+```
+
+## Setup
+
+<Tabs>
+  <Tab title="API Key">
+    For personal projects or testing:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createLinearAdapter } from '@chat-adapter/linear';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        linear: createLinearAdapter({
+          apiKey: process.env.LINEAR_API_KEY!,
+          webhookSecret: process.env.LINEAR_WEBHOOK_SECRET!,
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+  </Tab>
+
+  <Tab title="OAuth Access Token">
+    For user-authorized bots:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createLinearAdapter } from '@chat-adapter/linear';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        linear: createLinearAdapter({
+          accessToken: process.env.LINEAR_ACCESS_TOKEN!,
+          webhookSecret: process.env.LINEAR_WEBHOOK_SECRET!,
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+  </Tab>
+
+  <Tab title="Client Credentials">
+    For OAuth apps (tokens auto-refresh):
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createLinearAdapter } from '@chat-adapter/linear';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        linear: createLinearAdapter({
+          clientId: process.env.LINEAR_CLIENT_ID!,
+          clientSecret: process.env.LINEAR_CLIENT_SECRET!,
+          webhookSecret: process.env.LINEAR_WEBHOOK_SECRET!,
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+
+    <Note>
+      Client credentials tokens are valid for 30 days and auto-refresh when expired.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Webhook Handler
+
+```typescript
+app.post('/webhooks/linear', async (req, res) => {
+  const response = await linear.handleWebhook(req, {
+    waitUntil: (promise) => {/* handle async work */},
+  });
+  res.status(response.status).send(await response.text());
+});
+```
+
+Configure webhook in Linear:
+1. Go to Settings → Workspace → Webhooks
+2. Create webhook with URL: `https://your-app.com/webhooks/linear`
+3. Add webhook secret
+4. Subscribe to events: `Comment` (create), `Reaction` (create/delete)
+
+## Features
+
+### Supported Events
+
+- `Comment` (create) - New comments on issues
+- `Reaction` (create/delete) - Emoji reactions on comments
+
+### Thread Types
+
+Linear adapter supports two thread types:
+
+**1. Issue-level threads**
+```
+linear:{issueId}
+```
+All top-level comments on an issue.
+
+**2. Comment-level threads**
+```
+linear:{issueId}:c:{commentId}
+```
+Replies to a specific comment (nested thread).
+
+### Posting Comments
+
+Post to issue:
+
+```typescript
+// Thread ID: linear:ISS-123
+await thread.post('This looks good to me!');
+```
+
+Reply to a comment thread:
+
+```typescript
+// Thread ID: linear:ISS-123:c:comment-abc
+await thread.post('Thanks for the clarification.');
+```
+
+### Markdown Support
+
+Linear supports markdown in comments:
+
+```typescript
+await thread.post(`
+## Update
+
+Fixed the following:
+- [x] Bug in login flow
+- [x] Performance issue
+- [ ] Documentation
+`);
+```
+
+### Reactions
+
+Add reactions to comments:
+
+```typescript
+await thread.addReaction(commentId, '👍');
+await thread.addReaction(commentId, { name: 'thumbs_up' });
+```
+
+<Warning>
+  `removeReaction()` is not fully supported. Linear requires the reaction ID, which would need an additional API call to look up.
+</Warning>
+
+### Cards
+
+Cards are converted to markdown:
+
+```typescript
+import { Card, Section } from 'chat/cards';
+
+await thread.post(
+  <Card title="Status Update">
+    <Section text="All tasks completed for this sprint" />
+  </Card>
+);
+// Renders as formatted markdown
+```
+
+## Thread IDs
+
+Linear thread IDs encode issue ID and optional comment ID:
+
+```
+linear:{issueId}[:c:{commentId}]
+```
+
+Examples:
+- Issue: `linear:PROJ-123`
+- Comment thread: `linear:PROJ-123:c:abc123`
+
+## Message History
+
+Fetch comments from an issue or comment thread:
+
+```typescript
+const { messages, nextCursor } = await thread.fetchMessages({
+  limit: 50,
+  direction: 'backward',
+});
+```
+
+## Threading Behavior
+
+Linear webhooks include parent comment information:
+
+- **Root comment** (no `parentId`): Creates new comment-level thread
+- **Reply** (has `parentId`): Routes to parent's thread
+
+This ensures all replies to a comment are grouped together.
+
+## Platform Limits
+
+- **Comment length**: ~10,000 characters (no official limit documented)
+- **API rate limits**: [Linear rate limits](https://developers.linear.app/docs/graphql/working-with-the-graphql-api#rate-limiting)
+
+## Code Examples
+
+<CodeGroup>
+  ```typescript Comment Handler
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.includes('approved')) {
+      await event.thread.addReaction(event.message.id, '✅');
+    }
+  });
+  ```
+
+  ```typescript Auto-Reply
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.includes('question')) {
+      await event.thread.post('Let me check on that...');
+    }
+  });
+  ```
+
+  ```typescript Status Updates
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.includes('/deploy')) {
+      await event.thread.post('Deploying to production...');
+    }
+  });
+  ```
+
+  ```typescript Markdown Response
+  chat.onNewMessage(async (event) => {
+    await event.thread.post(`
+## Summary
+
+Issue triaged and assigned.
+
+**Next steps:**
+1. Review implementation
+2. Add tests
+3. Update docs
+    `);
+  });
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook signature fails">
+    - Verify `LINEAR_WEBHOOK_SECRET` matches Linear webhook settings
+    - Check webhook timestamp is within 5 minutes (prevent replay attacks)
+    - Ensure request body is raw (not parsed)
+  </Accordion>
+
+  <Accordion title="Bot doesn't respond to comments">
+    - Enable "Comment" webhook event in Linear settings
+    - Verify webhook URL is publicly accessible (HTTPS required)
+    - Check API key/token has `comments:create` scope
+  </Accordion>
+
+  <Accordion title="Reactions don't work">
+    - Grant `comments:create` scope for adding reactions
+    - Use Unicode emoji strings or emoji names
+    - Note: `removeReaction()` has limited support
+  </Accordion>
+
+  <Accordion title="Client credentials token expired">
+    - Adapter auto-refreshes tokens before expiry
+    - If manual refresh needed, restart the adapter
+    - Tokens are valid for 30 days
+  </Accordion>
+</AccordionGroup>
+
+## Required Scopes
+
+**Linear OAuth Scopes:**
+- `read` - Read issues and comments
+- `write` - Create/edit comments
+- `comments:create` - Create comments
+- `issues:create` - Create issues (if needed)
+
+Personal API keys have full access to your workspace.
+
+## Creating a Linear OAuth App
+
+<Steps>
+  <Step title="Create OAuth app">
+    Go to [Linear OAuth Apps](https://linear.app/settings/api/applications) and create a new application.
+  </Step>
+
+  <Step title="Configure scopes">
+    Select required scopes:
+    - `read`
+    - `write`
+    - `comments:create`
+  </Step>
+
+  <Step title="Get credentials">
+    Copy Client ID and Client Secret.
+  </Step>
+
+  <Step title="Set redirect URL">
+    Add your OAuth callback URL (if using user authorization flow).
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Process comments and build workflows
+  </Card>
+  <Card title="Linear SDK" icon="linear" href="https://developers.linear.app/docs/sdk/getting-started">
+    Learn about the Linear GraphQL API
+  </Card>
+  <Card title="Issue Automation" icon="robot" href="/guides/issue-automation">
+    Build automated issue management bots
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Persist data across issue comments
+  </Card>
+</CardGroup>

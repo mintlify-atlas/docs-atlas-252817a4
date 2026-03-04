@@ -1,0 +1,464 @@
+---
+title: Telegram Adapter
+description: Build Telegram bots with webhook or long polling modes
+---
+
+## Installation
+
+```bash
+npm install @chat-adapter/telegram
+```
+
+## Environment Variables
+
+<Note>
+  Create a bot using [@BotFather](https://t.me/botfather) on Telegram to get your bot token.
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather |
+| `TELEGRAM_WEBHOOK_SECRET_TOKEN` | Optional | Secret token for webhook verification (recommended) |
+| `TELEGRAM_BOT_USERNAME` | Optional | Bot username (without @) |
+| `TELEGRAM_API_BASE_URL` | Optional | Custom Bot API server URL (default: `https://api.telegram.org`) |
+
+## Configuration Options
+
+```typescript
+interface TelegramAdapterConfig {
+  /** Bot token from @BotFather */
+  botToken: string;
+  /** Custom Bot API server URL (optional) */
+  apiBaseUrl?: string;
+  /** Operating mode: 'auto' | 'webhook' | 'polling' */
+  mode?: TelegramAdapterMode;
+  /** Long polling configuration (for polling mode) */
+  longPolling?: TelegramLongPollingConfig;
+  /** Secret token for webhook verification */
+  secretToken?: string;
+  /** Logger instance */
+  logger: Logger;
+  /** Override bot username */
+  userName?: string;
+}
+
+interface TelegramLongPollingConfig {
+  /** Delete webhook before starting polling (default: true) */
+  deleteWebhook?: boolean;
+  /** Drop pending updates (default: false) */
+  dropPendingUpdates?: boolean;
+  /** Max updates per request (1-100, default: 100) */
+  limit?: number;
+  /** Long polling timeout in seconds (0-300, default: 30) */
+  timeout?: number;
+  /** Retry delay in ms on error (default: 1000) */
+  retryDelayMs?: number;
+  /** Allowed update types (default: all) */
+  allowedUpdates?: string[];
+}
+```
+
+## Setup
+
+<Tabs>
+  <Tab title="Auto Mode (Recommended)">
+    Adapter automatically chooses webhook or polling based on environment:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createTelegramAdapter } from '@chat-adapter/telegram';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my_bot',
+      adapters: {
+        telegram: createTelegramAdapter({
+          botToken: process.env.TELEGRAM_BOT_TOKEN!,
+          secretToken: process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,
+          mode: 'auto', // Default
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+
+    Auto mode logic:
+    - If webhook is configured → use webhook mode
+    - If no webhook and not serverless → use polling mode
+    - If no webhook and serverless → keep webhook mode (manual setup required)
+  </Tab>
+
+  <Tab title="Webhook Mode">
+    For serverless platforms (Vercel, AWS Lambda, etc.):
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createTelegramAdapter } from '@chat-adapter/telegram';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my_bot',
+      adapters: {
+        telegram: createTelegramAdapter({
+          botToken: process.env.TELEGRAM_BOT_TOKEN!,
+          secretToken: process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,
+          mode: 'webhook',
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+
+    Set webhook URL using Telegram Bot API:
+    ```bash
+    curl -X POST https://api.telegram.org/bot<TOKEN>/setWebhook \
+      -d "url=https://your-app.com/webhooks/telegram" \
+      -d "secret_token=<SECRET>"
+    ```
+  </Tab>
+
+  <Tab title="Polling Mode">
+    For long-running servers (good for development):
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createTelegramAdapter } from '@chat-adapter/telegram';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my_bot',
+      adapters: {
+        telegram: createTelegramAdapter({
+          botToken: process.env.TELEGRAM_BOT_TOKEN!,
+          mode: 'polling',
+          longPolling: {
+            timeout: 30,
+            limit: 100,
+            // Optional: filter update types
+            allowedUpdates: ['message', 'callback_query', 'message_reaction'],
+          },
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    // Polling starts automatically in initialize()
+    ```
+
+    <Note>
+      Polling mode automatically deletes any configured webhook. The bot will continuously poll for updates.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Webhook Handler
+
+```typescript
+app.post('/webhooks/telegram', async (req, res) => {
+  const response = await telegram.handleWebhook(req, {
+    waitUntil: (promise) => {/* handle async work */},
+  });
+  res.status(response.status).send(await response.text());
+});
+```
+
+## Features
+
+### Supported Events
+
+- `message` - Regular messages in chats/groups
+- `edited_message` - Edited messages
+- `channel_post` - Channel posts
+- `callback_query` - Inline button clicks
+- `message_reaction` - Reactions added/removed
+
+### Message Types
+
+Telegram supports:
+- **Private chats** - 1:1 conversations
+- **Groups** - Multi-user chats
+- **Supergroups** - Large groups with threads/topics
+- **Channels** - Broadcast channels
+
+### Topic Threads (Supergroups)
+
+For groups with topics enabled:
+
+```typescript
+// Thread ID includes topic ID:
+// telegram:{chatId}:{messageThreadId}
+
+// Messages automatically route to the correct topic
+await thread.post('Reply in this topic');
+```
+
+### Inline Keyboards (Buttons)
+
+Create messages with inline buttons:
+
+```typescript
+import { Card, Section, Button } from 'chat/cards';
+
+await thread.post(
+  <Card title="Confirmation">
+    <Section text="Proceed with this action?" />
+    <Button actionId="confirm" style="primary">Yes</Button>
+    <Button actionId="cancel" style="danger">No</Button>
+  </Card>
+);
+```
+
+Handle button clicks:
+
+```typescript
+chat.onAction('confirm', async (event) => {
+  await event.thread.post('Confirmed!');
+});
+```
+
+<Note>
+  Telegram automatically acknowledges button clicks. The adapter calls `answerCallbackQuery` for you.
+</Note>
+
+### Reactions
+
+Add/remove reactions:
+
+```typescript
+// Unicode emoji
+await thread.addReaction(messageId, '👍');
+await thread.removeReaction(messageId, '👍');
+
+// Emoji names (auto-converted to unicode)
+await thread.addReaction(messageId, { name: 'thumbs_up' });
+
+// Custom emoji (Telegram Premium)
+await thread.addReaction(messageId, 'custom:5368324170671202286');
+```
+
+### File Uploads
+
+Send files with messages:
+
+```typescript
+import { readFileSync } from 'fs';
+
+await thread.post({
+  text: 'Monthly report',
+  files: [{
+    filename: 'report.pdf',
+    data: readFileSync('./report.pdf'),
+    mimeType: 'application/pdf',
+  }],
+});
+```
+
+<Warning>
+  Telegram adapter supports **one file per message**. Multiple files will throw a validation error.
+</Warning>
+
+### Markdown Formatting
+
+Telegram supports markdown in messages:
+
+```typescript
+await thread.post('**Bold** and *italic* text');
+```
+
+## Thread IDs
+
+Telegram thread IDs encode chat ID and optional topic:
+
+```
+telegram:{chatId}:{messageThreadId}
+```
+
+Examples:
+- Private chat: `telegram:123456789`
+- Group: `telegram:-987654321`
+- Group with topic: `telegram:-987654321:42`
+
+<Note>
+  Chat IDs are negative for groups/supergroups, positive for users.
+</Note>
+
+## Opening DMs
+
+Create a private chat with a user:
+
+```typescript
+const dmThreadId = await telegram.openDM(userId);
+await chat.getThread(dmThreadId).post('Hello!');
+```
+
+<Note>
+  User must have started a conversation with the bot first (via /start command or deep link).
+</Note>
+
+## Message History
+
+Message history is cached in-memory:
+
+```typescript
+const { messages, nextCursor } = await thread.fetchMessages({
+  limit: 50,
+  direction: 'backward',
+});
+```
+
+<Warning>
+  Telegram Bot API doesn't provide a message history endpoint. The adapter caches messages it receives. For persistent history, use a custom StateAdapter.
+</Warning>
+
+## Platform Limits
+
+- **Message length**: 4,096 characters
+- **Caption length**: 1,024 characters (for files)
+- **File size**: 50 MB (20 MB via Bot API by default, 50 MB with local Bot API server)
+- **Rate limits**: 30 messages/second globally, 1 message/second per chat
+- **Inline keyboard buttons**: 100 buttons max
+
+See [Telegram limits](https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this) for details.
+
+## Code Examples
+
+<CodeGroup>
+  ```typescript Message Handler
+  chat.onNewMessage(async (event) => {
+    if (event.message.text.startsWith('/start')) {
+      await event.thread.post('Welcome! How can I help?');
+    }
+  });
+  ```
+
+  ```typescript Mention Handler
+  chat.onNewMention(async (event) => {
+    await event.thread.post(`Hi @${event.message.author.userName}!`);
+  });
+  ```
+
+  ```typescript Button Handler
+  chat.onAction('buy_now', async (event) => {
+    await event.thread.post('Processing your order...');
+  });
+  ```
+
+  ```typescript Reaction Handler
+  chat.onReaction(async (event) => {
+    if (event.emoji.name === 'fire' && event.added) {
+      await event.thread.post('Thanks for the 🔥!');
+    }
+  });
+  ```
+
+  ```typescript Inline Keyboard
+  import { Card, Section, Button } from 'chat/cards';
+
+  await thread.post(
+    <Card>
+      <Section text="Choose a plan:" />
+      <Button actionId="plan_free">Free Plan</Button>
+      <Button actionId="plan_pro" style="primary">Pro Plan</Button>
+      <Button actionId="plan_enterprise">Enterprise</Button>
+    </Card>
+  );
+  ```
+</CodeGroup>
+
+## Polling Control
+
+Manually start/stop polling:
+
+```typescript
+// Start polling
+await telegram.startPolling({
+  timeout: 30,
+  limit: 50,
+  dropPendingUpdates: true, // Ignore old updates
+});
+
+// Check status
+console.log('Polling active:', telegram.isPolling);
+console.log('Runtime mode:', telegram.runtimeMode); // 'polling' or 'webhook'
+
+// Stop polling
+await telegram.stopPolling();
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook verification fails">
+    - Set `secretToken` in adapter config and webhook URL
+    - Verify secret token matches in both places
+    - Check that header `x-telegram-bot-api-secret-token` is present
+  </Accordion>
+
+  <Accordion title="Bot doesn't respond in groups">
+    - Disable [Privacy Mode](https://core.telegram.org/bots/features#privacy-mode) via @BotFather
+    - Or add bot as admin to receive all messages
+    - Groups require `/setprivacy` disabled to receive non-command messages
+  </Accordion>
+
+  <Accordion title="Polling mode conflicts">
+    - Only one polling instance can run at a time
+    - Use `telegram.stopPolling()` before starting a new instance
+    - Check `telegram.isPolling` before starting
+  </Accordion>
+
+  <Accordion title="File uploads fail">
+    - Verify file size is under 50 MB
+    - Only one file per message is supported
+    - Use proper MIME types (optional but recommended)
+  </Accordion>
+</AccordionGroup>
+
+## Bot Commands
+
+Register commands via @BotFather:
+
+```
+/setcommands
+
+start - Start the bot
+help - Show help
+status - Check status
+```
+
+Handle commands in code:
+
+```typescript
+chat.onNewMessage(async (event) => {
+  const text = event.message.text;
+  
+  if (text === '/start') {
+    await event.thread.post('Bot started!');
+  }
+  
+  if (text === '/help') {
+    await event.thread.post('Available commands: /start, /help, /status');
+  }
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Process messages and build conversation flows
+  </Card>
+  <Card title="Inline Keyboards" icon="sparkles" href="/features/cards">
+    Create interactive buttons with cards
+  </Card>
+  <Card title="Telegram Bot API" icon="telegram" href="https://core.telegram.org/bots/api">
+    Learn about Telegram's Bot API
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Persist data across requests
+  </Card>
+</CardGroup>

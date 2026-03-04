@@ -1,0 +1,462 @@
+---
+title: Modal Forms and Dialogs
+description: Create interactive forms and dialog workflows with modal elements
+---
+
+# Modal Forms and Dialogs
+
+Modals allow you to collect structured input from users through form dialogs. They can be opened from button clicks, slash commands, or other interactions.
+
+## Modal Structure
+
+```typescript
+interface ModalElement {
+  type: "modal";
+  callbackId: string;          // Unique ID for routing submissions
+  title: string;               // Modal title
+  submitLabel?: string;        // Submit button text (default: "Submit")
+  closeLabel?: string;         // Close button text (default: "Cancel")
+  notifyOnClose?: boolean;     // Fire event when closed without submitting
+  privateMetadata?: string;    // Pass context through the modal lifecycle
+  children: ModalChild[];      // Form inputs
+}
+```
+
+## Opening Modals
+
+### From Button Actions
+
+```typescript
+chat.onAction("open_form", async (event) => {
+  await event.openModal(
+    <Modal callbackId="feedback_form" title="Submit Feedback">
+      <TextInput id="feedback" label="Your feedback" multiline />
+      <Select
+        id="category"
+        label="Category"
+        options={[
+          { label: "Bug Report", value: "bug" },
+          { label: "Feature Request", value: "feature" },
+          { label: "Question", value: "question" },
+        ]}
+      />
+    </Modal>
+  );
+});
+```
+
+### From Slash Commands
+
+```typescript
+chat.onSlashCommand("/feedback", async (event) => {
+  await event.openModal(
+    <Modal 
+      callbackId="feedback_form" 
+      title="Submit Feedback"
+      submitLabel="Send"
+      closeLabel="Dismiss"
+    >
+      <TextInput 
+        id="message" 
+        label="Message" 
+        placeholder="Tell us what you think..."
+        multiline
+      />
+    </Modal>
+  );
+});
+```
+
+## Form Input Elements
+
+### TextInput
+
+Single or multi-line text input.
+
+```typescript
+interface TextInputElement {
+  type: "text_input";
+  id: string;
+  label: string;
+  placeholder?: string;
+  initialValue?: string;
+  multiline?: boolean;
+  optional?: boolean;
+  maxLength?: number;
+}
+```
+
+**Example:**
+
+```tsx
+<TextInput 
+  id="name" 
+  label="Full Name" 
+  placeholder="John Doe"
+  maxLength={100}
+/>
+
+<TextInput
+  id="description"
+  label="Description"
+  multiline
+  optional
+  placeholder="Provide additional details..."
+/>
+```
+
+### Select
+
+Dropdown selection (single choice).
+
+```typescript
+interface SelectElement {
+  type: "select";
+  id: string;
+  label: string;
+  options: SelectOptionElement[];
+  placeholder?: string;
+  initialOption?: string;      // Value of pre-selected option
+  optional?: boolean;
+}
+
+interface SelectOptionElement {
+  label: string;
+  value: string;
+  description?: string;
+}
+```
+
+**Example:**
+
+```tsx
+<Select
+  id="priority"
+  label="Priority Level"
+  placeholder="Choose priority..."
+  initialOption="medium"
+  options={[
+    { label: "Low", value: "low", description: "Non-urgent" },
+    { label: "Medium", value: "medium", description: "Normal priority" },
+    { label: "High", value: "high", description: "Urgent" },
+  ]}
+/>
+```
+
+**Function API:**
+
+```typescript
+Select({
+  id: "status",
+  label: "Status",
+  options: [
+    SelectOption({ label: "Active", value: "active" }),
+    SelectOption({ label: "Inactive", value: "inactive" }),
+  ],
+})
+```
+
+### RadioSelect
+
+Radio button group (single choice).
+
+```typescript
+interface RadioSelectElement {
+  type: "radio_select";
+  id: string;
+  label: string;
+  options: SelectOptionElement[];
+  initialOption?: string;
+  optional?: boolean;
+}
+```
+
+**Example:**
+
+```tsx
+<RadioSelect
+  id="notification"
+  label="Notification Preference"
+  initialOption="email"
+  options={[
+    { label: "Email", value: "email" },
+    { label: "Slack", value: "slack" },
+    { label: "None", value: "none" },
+  ]}
+/>
+```
+
+## Handling Modal Submissions
+
+Register a handler for the modal's `callbackId`:
+
+```typescript
+chat.onModalSubmit("feedback_form", async (event) => {
+  // Access form values
+  const feedback = event.values.feedback;
+  const category = event.values.category;
+  
+  // Process the submission
+  await saveFeedback({
+    user: event.user.userId,
+    feedback,
+    category,
+  });
+  
+  // Post confirmation to the related thread (if opened from action)
+  if (event.relatedThread) {
+    await event.relatedThread.post(
+      `Thank you for your ${category} feedback!`
+    );
+  }
+  
+  // Close the modal (default behavior if no response returned)
+});
+```
+
+## Modal Submit Event
+
+```typescript
+interface ModalSubmitEvent {
+  callbackId: string;
+  values: Record<string, string>;  // Input values by ID
+  user: Author;                    // Who submitted
+  viewId: string;                  // Platform-specific view ID
+  privateMetadata?: string;        // Context you passed in
+  
+  // Context from where modal was opened
+  relatedThread?: Thread;          // From ActionEvent.openModal()
+  relatedMessage?: SentMessage;    // The message with the button
+  relatedChannel?: Channel;        // From SlashCommandEvent.openModal()
+  
+  adapter: Adapter;
+  raw: unknown;
+}
+```
+
+## Modal Responses
+
+### Validation Errors
+
+Show field-specific errors without closing the modal:
+
+```typescript
+chat.onModalSubmit("user_form", async (event) => {
+  const email = event.values.email;
+  
+  if (!email.includes("@")) {
+    return {
+      action: "errors",
+      errors: {
+        email: "Please enter a valid email address",
+      },
+    };
+  }
+  
+  // Process valid submission...
+});
+```
+
+### Update Modal
+
+Update the modal content (for multi-step flows):
+
+```typescript
+chat.onModalSubmit("step1", async (event) => {
+  return {
+    action: "update",
+    modal: Modal({
+      callbackId: "step2",
+      title: "Step 2 of 2",
+      children: [
+        TextInput({ id: "details", label: "Additional Details" }),
+      ],
+    }),
+  };
+});
+```
+
+### Push New Modal
+
+Stack a new modal on top (Slack only):
+
+```typescript
+chat.onModalSubmit("create_item", async (event) => {
+  return {
+    action: "push",
+    modal: Modal({
+      callbackId: "confirm_create",
+      title: "Confirm Creation",
+      children: [
+        Text("Are you sure you want to create this item?"),
+      ],
+    }),
+  };
+});
+```
+
+### Close Modal
+
+Explicitly close the modal:
+
+```typescript
+chat.onModalSubmit("cancel_form", async (event) => {
+  return { action: "close" };
+});
+```
+
+## Private Metadata
+
+Pass context through the modal lifecycle:
+
+```typescript
+// Open modal with context
+chat.onAction("edit_order", async (event) => {
+  const orderId = event.value;
+  
+  await event.openModal(
+    <Modal
+      callbackId="edit_order_form"
+      title="Edit Order"
+      privateMetadata={JSON.stringify({ orderId, threadId: event.threadId })}
+    >
+      <TextInput id="quantity" label="Quantity" />
+    </Modal>
+  );
+});
+
+// Retrieve context in handler
+chat.onModalSubmit("edit_order_form", async (event) => {
+  const { orderId, threadId } = JSON.parse(event.privateMetadata || "{}");
+  
+  const quantity = event.values.quantity;
+  
+  await updateOrder(orderId, { quantity });
+});
+```
+
+## Handling Modal Close
+
+Listen for modal dismissal (requires `notifyOnClose: true`):
+
+```typescript
+chat.onModalClose("feedback_form", async (event) => {
+  console.log(`User ${event.user.userName} closed the feedback form`);
+});
+```
+
+```typescript
+interface ModalCloseEvent {
+  callbackId: string;
+  user: Author;
+  viewId: string;
+  privateMetadata?: string;
+  relatedThread?: Thread;
+  relatedMessage?: SentMessage;
+  relatedChannel?: Channel;
+  adapter: Adapter;
+  raw: unknown;
+}
+```
+
+## Complete Example
+
+Full workflow with validation and confirmation:
+
+```typescript
+import { Chat, Modal, TextInput, Select, SelectOption, Card, Text, Actions, Button } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+// Trigger modal from command
+chat.onSlashCommand("/create-ticket", async (event) => {
+  await event.openModal(
+    <Modal
+      callbackId="create_ticket"
+      title="Create Support Ticket"
+      submitLabel="Create"
+      notifyOnClose
+    >
+      <TextInput
+        id="subject"
+        label="Subject"
+        placeholder="Brief description..."
+        maxLength={100}
+      />
+      <TextInput
+        id="description"
+        label="Description"
+        multiline
+        placeholder="Detailed explanation..."
+      />
+      <Select
+        id="priority"
+        label="Priority"
+        options={[
+          { label: "Low", value: "low" },
+          { label: "Medium", value: "medium" },
+          { label: "High", value: "high" },
+        ]}
+      />
+    </Modal>
+  );
+});
+
+// Handle submission with validation
+chat.onModalSubmit("create_ticket", async (event) => {
+  const { subject, description, priority } = event.values;
+  
+  // Validate
+  if (subject.length < 5) {
+    return {
+      action: "errors",
+      errors: {
+        subject: "Subject must be at least 5 characters",
+      },
+    };
+  }
+  
+  // Create ticket
+  const ticket = await createTicket({
+    subject,
+    description,
+    priority,
+    userId: event.user.userId,
+  });
+  
+  // Post confirmation to channel
+  if (event.relatedChannel) {
+    await event.relatedChannel.post(
+      <Card title="Ticket Created">
+        <Text style="bold">Ticket #{ticket.id}</Text>
+        <Text>{subject}</Text>
+        <Text style="muted">Priority: {priority}</Text>
+      </Card>
+    );
+  }
+  
+  // Modal closes automatically
+});
+
+// Track cancellations
+chat.onModalClose("create_ticket", async (event) => {
+  console.log(`Ticket creation cancelled by ${event.user.userName}`);
+});
+```
+
+## Platform Support
+
+- **Slack**: Full support (update, push, errors)
+- **Microsoft Teams**: Basic support (submit/close only)
+- **Google Chat**: Card-based dialogs
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Actions" icon="hand-pointer" href="/actions">
+    Learn how to trigger modals from buttons
+  </Card>
+  <Card title="Slash Commands" icon="terminal" href="/slash-commands">
+    Open modals from slash commands
+  </Card>
+</CardGroup>

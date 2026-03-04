@@ -1,0 +1,457 @@
+---
+title: Message Interface
+description: A chat message with metadata, formatting, and attachments
+---
+
+The `Message` class represents a chat message with structured formatting (mdast AST), metadata, attachments, and platform-specific raw data. It supports serialization for workflow engines.
+
+## Constructor
+
+```typescript
+new Message<TRawMessage>(data: MessageData<TRawMessage>)
+```
+
+<ParamField path="data" type="MessageData<TRawMessage>" required>
+  Message data object
+
+  <Expandable title="MessageData properties">
+    <ParamField path="id" type="string" required>
+      Unique message ID
+    </ParamField>
+    <ParamField path="threadId" type="string" required>
+      Thread this message belongs to
+    </ParamField>
+    <ParamField path="text" type="string" required>
+      Plain text content (all formatting stripped)
+    </ParamField>
+    <ParamField path="formatted" type="Root" required>
+      Structured formatting as mdast AST (canonical representation)
+    </ParamField>
+    <ParamField path="raw" type="TRawMessage" required>
+      Platform-specific raw payload (escape hatch)
+    </ParamField>
+    <ParamField path="author" type="Author" required>
+      Message author
+    </ParamField>
+    <ParamField path="metadata" type="MessageMetadata" required>
+      Message metadata (dateSent, edited, etc.)
+    </ParamField>
+    <ParamField path="attachments" type="Attachment[]" required>
+      Attachments (images, files, videos, audio)
+    </ParamField>
+    <ParamField path="isMention" type="boolean">
+      Whether the bot is @-mentioned in this message
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="message" type="Message<TRawMessage>">
+  Message instance
+</ResponseField>
+
+## Properties
+
+### id
+
+```typescript
+readonly id: string
+```
+
+Unique message ID.
+
+### threadId
+
+```typescript
+readonly threadId: string
+```
+
+Thread this message belongs to.
+
+### text
+
+```typescript
+text: string
+```
+
+Plain text content with all formatting stripped.
+
+```typescript
+console.log(message.text); // "Hello world"
+```
+
+### formatted
+
+```typescript
+formatted: FormattedContent
+```
+
+Structured formatting as an mdast AST (Root). This is the canonical representation - use this for processing.
+
+<Note>
+Use `stringifyMarkdown(message.formatted)` from the `chat` package to convert the AST back to a markdown string.
+</Note>
+
+```typescript
+import { stringifyMarkdown } from "chat";
+
+const markdown = stringifyMarkdown(message.formatted);
+console.log(markdown); // "**Hello** _world_"
+```
+
+### raw
+
+```typescript
+raw: TRawMessage
+```
+
+Platform-specific raw payload. Use this as an escape hatch when you need to access platform-specific fields not exposed by the normalized Message interface.
+
+```typescript
+// Slack-specific data
+const slackMessage = message.raw as SlackMessage;
+if (slackMessage.team_id) {
+  console.log(`Team: ${slackMessage.team_id}`);
+}
+```
+
+### author
+
+```typescript
+author: Author
+```
+
+Message author information.
+
+<ResponseField name="author" type="Author">
+  <Expandable title="Author properties">
+    <ResponseField name="userId" type="string">
+      Unique user ID
+    </ResponseField>
+    <ResponseField name="userName" type="string">
+      Username/handle for @-mentions
+    </ResponseField>
+    <ResponseField name="fullName" type="string">
+      Display name
+    </ResponseField>
+    <ResponseField name="isBot" type="boolean | 'unknown'">
+      Whether the author is a bot
+    </ResponseField>
+    <ResponseField name="isMe" type="boolean">
+      Whether the author is this bot
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```typescript
+console.log(`From: ${message.author.fullName}`);
+if (message.author.isBot) {
+  console.log("This is a bot message");
+}
+```
+
+### metadata
+
+```typescript
+metadata: MessageMetadata
+```
+
+Message metadata including timestamps and edit status.
+
+<ResponseField name="metadata" type="MessageMetadata">
+  <Expandable title="MessageMetadata properties">
+    <ResponseField name="dateSent" type="Date">
+      When the message was sent
+    </ResponseField>
+    <ResponseField name="edited" type="boolean">
+      Whether the message has been edited
+    </ResponseField>
+    <ResponseField name="editedAt" type="Date | undefined">
+      When the message was last edited (if applicable)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```typescript
+console.log(`Sent: ${message.metadata.dateSent.toISOString()}`);
+if (message.metadata.edited) {
+  console.log(`Edited: ${message.metadata.editedAt?.toISOString()}`);
+}
+```
+
+### attachments
+
+```typescript
+attachments: Attachment[]
+```
+
+Files, images, videos, or audio attached to the message.
+
+<ResponseField name="attachment" type="Attachment">
+  <Expandable title="Attachment properties">
+    <ResponseField name="type" type="'image' | 'file' | 'video' | 'audio'">
+      Type of attachment
+    </ResponseField>
+    <ResponseField name="url" type="string | undefined">
+      URL to the file (for linking/downloading)
+    </ResponseField>
+    <ResponseField name="name" type="string | undefined">
+      Filename
+    </ResponseField>
+    <ResponseField name="mimeType" type="string | undefined">
+      MIME type
+    </ResponseField>
+    <ResponseField name="size" type="number | undefined">
+      File size in bytes
+    </ResponseField>
+    <ResponseField name="width" type="number | undefined">
+      Image/video width (if applicable)
+    </ResponseField>
+    <ResponseField name="height" type="number | undefined">
+      Image/video height (if applicable)
+    </ResponseField>
+    <ResponseField name="data" type="Buffer | Blob | undefined">
+      Binary data (for uploading or if already fetched)
+    </ResponseField>
+    <ResponseField name="fetchData" type="() => Promise<Buffer> | undefined">
+      Fetch the attachment data. For platforms that require authentication (like Slack private URLs), this method handles auth automatically.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```typescript
+for (const attachment of message.attachments) {
+  if (attachment.type === "image") {
+    console.log(`Image: ${attachment.url}`);
+    console.log(`Size: ${attachment.width}x${attachment.height}`);
+  }
+}
+```
+
+### isMention
+
+```typescript
+isMention?: boolean
+```
+
+Whether the bot is @-mentioned in this message.
+
+<Note>
+This is set by the Chat SDK before passing the message to handlers. It checks for `@username` in the message text using the adapter's configured `userName` and optional `botUserId`.
+</Note>
+
+```typescript
+chat.onSubscribedMessage(async (thread, message) => {
+  if (message.isMention) {
+    await thread.post("You mentioned me!");
+  }
+});
+```
+
+## Methods
+
+### toJSON()
+
+```typescript
+toJSON(): SerializedMessage
+```
+
+Serialize the message to a plain JSON object. Use this to pass message data to external systems like workflow engines.
+
+<ResponseField name="serialized" type="SerializedMessage">
+  Serialized message with dates as ISO strings
+
+  <Expandable title="SerializedMessage properties">
+    <ResponseField name="_type" type="'chat:Message'">
+      Type marker for deserialization
+    </ResponseField>
+    <ResponseField name="id" type="string">
+      Message ID
+    </ResponseField>
+    <ResponseField name="threadId" type="string">
+      Thread ID
+    </ResponseField>
+    <ResponseField name="text" type="string">
+      Plain text content
+    </ResponseField>
+    <ResponseField name="formatted" type="Root">
+      mdast AST
+    </ResponseField>
+    <ResponseField name="raw" type="unknown">
+      Platform-specific raw payload
+    </ResponseField>
+    <ResponseField name="author" type="object">
+      Author info
+    </ResponseField>
+    <ResponseField name="metadata" type="object">
+      Metadata with dates as ISO strings
+    </ResponseField>
+    <ResponseField name="attachments" type="Array<object>">
+      Attachments (data and fetchData omitted as not serializable)
+    </ResponseField>
+    <ResponseField name="isMention" type="boolean | undefined">
+      Whether bot is mentioned
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+Attachment `data` (Buffer) and `fetchData` (function) are omitted as they're not serializable.
+</Note>
+
+```typescript
+const serialized = message.toJSON();
+await workflow.start("process-message", { message: serialized });
+```
+
+### Static Methods
+
+#### fromJSON()
+
+```typescript
+static fromJSON<TRawMessage = unknown>(
+  json: SerializedMessage
+): Message<TRawMessage>
+```
+
+Reconstruct a Message from serialized JSON data. Converts ISO date strings back to Date objects.
+
+<ParamField path="json" type="SerializedMessage" required>
+  Serialized message data
+</ParamField>
+
+<ResponseField name="message" type="Message<TRawMessage>">
+  Reconstructed Message instance
+</ResponseField>
+
+```typescript
+const message = Message.fromJSON(serializedMessage);
+console.log(message.metadata.dateSent); // Date object
+```
+
+## Type Parameters
+
+<ParamField path="TRawMessage" type="unknown" default="unknown">
+  Platform-specific raw message type
+</ParamField>
+
+## Usage Examples
+
+### Accessing Message Content
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  console.log(`User: ${message.author.fullName}`);
+  console.log(`Text: ${message.text}`);
+  console.log(`Sent: ${message.metadata.dateSent.toISOString()}`);
+  
+  if (message.attachments.length > 0) {
+    console.log(`Attachments: ${message.attachments.length}`);
+  }
+});
+```
+
+### Checking for Mentions
+
+```typescript
+chat.onSubscribedMessage(async (thread, message) => {
+  if (message.isMention) {
+    await thread.post(`Thanks for mentioning me, ${message.author.fullName}!`);
+  }
+});
+```
+
+### Processing Attachments
+
+```typescript
+chat.onNewMessage(/^analyze image/, async (thread, message) => {
+  const images = message.attachments.filter(a => a.type === "image");
+  
+  if (images.length === 0) {
+    await thread.post("Please attach an image to analyze.");
+    return;
+  }
+  
+  for (const image of images) {
+    console.log(`Processing: ${image.name}`);
+    console.log(`Size: ${image.width}x${image.height}`);
+    
+    // Fetch image data if needed
+    if (image.fetchData) {
+      const data = await image.fetchData();
+      // Process image data...
+    }
+  }
+});
+```
+
+### Working with Formatted Content
+
+```typescript
+import { stringifyMarkdown, toPlainText } from "chat";
+
+chat.onSubscribedMessage(async (thread, message) => {
+  // Get as markdown
+  const markdown = stringifyMarkdown(message.formatted);
+  console.log(`Markdown: ${markdown}`);
+  
+  // Get as plain text (same as message.text)
+  const plain = toPlainText(message.formatted);
+  console.log(`Plain: ${plain}`);
+});
+```
+
+### Serialization for Workflows
+
+```typescript
+import { Chat } from "chat";
+import { workflow } from "@workflow/engine";
+
+chat.onNewMention(async (thread, message) => {
+  // Serialize message for workflow
+  const serialized = message.toJSON();
+  
+  await workflow.start("process-inquiry", {
+    message: serialized,
+    thread: thread.toJSON(),
+  });
+});
+
+// In workflow handler
+workflow.on("process-inquiry", async (data) => {
+  // Deserialize message
+  const message = Message.fromJSON(data.message);
+  console.log(message.text); // Works!
+  console.log(message.metadata.dateSent); // Date object restored
+});
+```
+
+### Platform-Specific Data
+
+```typescript
+interface SlackMessage {
+  team_id?: string;
+  channel?: string;
+  ts?: string;
+  blocks?: unknown[];
+}
+
+chat.onNewMention(async (thread, message) => {
+  // Access Slack-specific fields
+  const slackData = message.raw as SlackMessage;
+  
+  if (slackData.team_id) {
+    console.log(`Team: ${slackData.team_id}`);
+  }
+  
+  if (slackData.blocks) {
+    console.log(`Has ${slackData.blocks.length} Block Kit blocks`);
+  }
+});
+```
+
+## See Also
+
+- [Chat API](/api/chat) - Main Chat class
+- [Thread API](/api/thread) - Thread interface
+- [Formatting](/core/formatting) - Markdown and AST formatting
+- [Attachments](/core/attachments) - Working with file attachments

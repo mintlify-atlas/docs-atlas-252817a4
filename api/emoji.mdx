@@ -1,0 +1,496 @@
+---
+title: Emoji Utilities
+description: API reference for cross-platform emoji support
+---
+
+The Chat SDK provides a unified emoji system that works consistently across all platforms. Emoji are represented as immutable singleton `EmojiValue` objects that support object identity comparison.
+
+## Quick Start
+
+```typescript
+import { emoji } from "chat";
+
+await thread.post(`Great job! ${emoji.thumbs_up} ${emoji.fire}`);
+// Slack: "Great job! :+1: :fire:"
+// Google Chat: "Great job! 👍 🔥"
+```
+
+## The emoji Helper
+
+The `emoji` object provides type-safe access to all well-known emoji.
+
+```typescript
+import { emoji } from "chat";
+
+// Use in messages (template strings call toString())
+await thread.post(`${emoji.rocket} Deployed!`);
+
+// Use in reactions
+await message.addReaction(emoji.thumbs_up);
+
+// Compare in event handlers (object identity)
+chat.onReaction([emoji.thumbs_up, emoji.heart], async (event) => {
+  if (event.emoji === emoji.thumbs_up) {
+    console.log("User gave a thumbs up!");
+  }
+});
+```
+
+## EmojiValue
+
+Immutable singleton objects representing emoji.
+
+```typescript
+interface EmojiValue {
+  /** The normalized emoji name (e.g., "thumbs_up") */
+  readonly name: string;
+  /** Returns the placeholder string for message formatting */
+  toString(): string;
+  /** Returns the placeholder string (for JSON.stringify) */
+  toJSON(): string;
+}
+```
+
+**Key Properties:**
+
+- **Object Identity**: Same emoji name always returns same object instance, enabling `===` comparison
+- **Template String Support**: `toString()` is called automatically in template strings
+- **Platform Conversion**: Placeholders are automatically converted to platform-specific format
+
+**Example:**
+
+```typescript
+const e1 = emoji.thumbs_up;
+const e2 = emoji.thumbs_up;
+
+console.log(e1 === e2); // true - same object
+console.log(e1.name); // "thumbs_up"
+console.log(String(e1)); // "{{emoji:thumbs_up}}"
+```
+
+## Well-Known Emoji
+
+The SDK includes 80+ emoji that work across all platforms:
+
+### Reactions & Gestures
+
+```typescript
+emoji.thumbs_up
+emoji.thumbs_down
+emoji.clap
+emoji.wave
+emoji.pray
+emoji.muscle
+emoji.ok_hand
+emoji.point_up
+emoji.point_down
+emoji.point_left
+emoji.point_right
+emoji.raised_hands
+emoji.shrug
+emoji.facepalm
+```
+
+### Emotions & Faces
+
+```typescript
+emoji.heart
+emoji.smile
+emoji.laugh
+emoji.thinking
+emoji.sad
+emoji.cry
+emoji.angry
+emoji.love_eyes
+emoji.cool
+emoji.wink
+emoji.surprised
+emoji.worried
+emoji.confused
+emoji.neutral
+emoji.sleeping
+emoji.sick
+emoji.mind_blown
+emoji.relieved
+emoji.grimace
+emoji.rolling_eyes
+emoji.hug
+emoji.zany
+```
+
+### Status & Symbols
+
+```typescript
+emoji.check
+emoji.x
+emoji.question
+emoji.exclamation
+emoji.warning
+emoji.stop
+emoji.info
+emoji["100"]
+emoji.fire
+emoji.star
+emoji.sparkles
+emoji.lightning
+emoji.boom
+emoji.eyes
+```
+
+### Status Indicators
+
+```typescript
+emoji.green_circle
+emoji.yellow_circle
+emoji.red_circle
+emoji.blue_circle
+emoji.white_circle
+emoji.black_circle
+```
+
+### Objects & Tools
+
+```typescript
+emoji.rocket
+emoji.party
+emoji.confetti
+emoji.balloon
+emoji.gift
+emoji.trophy
+emoji.medal
+emoji.lightbulb
+emoji.gear
+emoji.wrench
+emoji.hammer
+emoji.bug
+emoji.link
+emoji.lock
+emoji.unlock
+emoji.key
+emoji.pin
+emoji.memo
+emoji.clipboard
+emoji.calendar
+emoji.clock
+emoji.hourglass
+emoji.bell
+emoji.megaphone
+emoji.speech_bubble
+emoji.email
+emoji.inbox
+emoji.outbox
+emoji.package
+emoji.folder
+emoji.file
+emoji.chart_up
+emoji.chart_down
+emoji.coffee
+emoji.pizza
+emoji.beer
+```
+
+### Arrows & Directions
+
+```typescript
+emoji.arrow_up
+emoji.arrow_down
+emoji.arrow_left
+emoji.arrow_right
+emoji.refresh
+```
+
+### Nature & Weather
+
+```typescript
+emoji.sun
+emoji.cloud
+emoji.rain
+emoji.snow
+emoji.rainbow
+```
+
+## Custom Emoji
+
+Add custom emoji using module augmentation and `createEmoji()`.
+
+### Step 1: Declare Custom Emoji Types
+
+Create a `.d.ts` file:
+
+```typescript
+// types/chat.d.ts
+import type { EmojiFormats } from "chat";
+
+declare module "chat" {
+  interface CustomEmojiMap {
+    unicorn: EmojiFormats;
+    company_logo: EmojiFormats;
+  }
+}
+```
+
+### Step 2: Create Emoji Helper
+
+```typescript
+import { createEmoji } from "chat";
+
+export const emoji = createEmoji({
+  unicorn: { slack: "unicorn_face", gchat: "🦄" },
+  company_logo: { slack: "company", gchat: "🏢" }
+});
+```
+
+### Step 3: Use Custom Emoji
+
+```typescript
+// Type-safe access to custom emoji
+await thread.post(`${emoji.unicorn} Magic!`);
+
+// Object identity comparison works
+if (event.emoji === emoji.company_logo) {
+  console.log("Company logo reaction!");
+}
+```
+
+## createEmoji
+
+Create a type-safe emoji helper with custom emoji.
+
+```typescript
+function createEmoji<T extends Record<string, EmojiFormats>>(
+  customEmoji?: T
+): BaseEmojiHelper & { [K in keyof T]: EmojiValue };
+
+interface EmojiFormats {
+  /** Slack emoji name (without colons), e.g., "+1", "heart" */
+  slack: string | string[];
+  /** Google Chat unicode emoji, e.g., "👍", "❤️" */
+  gchat: string | string[];
+}
+```
+
+**Example:**
+
+```typescript
+import { createEmoji } from "chat";
+
+const emoji = createEmoji({
+  // Single format per platform
+  unicorn: {
+    slack: "unicorn_face",
+    gchat: "🦄"
+  },
+  // Multiple formats (for normalization)
+  checkmark: {
+    slack: ["white_check_mark", "heavy_check_mark"],
+    gchat: ["✅", "✔️"]
+  }
+});
+
+await thread.post(`${emoji.unicorn} Done ${emoji.checkmark}`);
+```
+
+## EmojiResolver
+
+Converter between platform-specific formats and normalized emoji.
+
+```typescript
+class EmojiResolver {
+  constructor(customMap?: EmojiMapConfig);
+  
+  fromSlack(slackEmoji: string): EmojiValue;
+  fromGChat(gchatEmoji: string): EmojiValue;
+  fromTeams(teamsReaction: string): EmojiValue;
+  
+  toSlack(emoji: EmojiValue | string): string;
+  toGChat(emoji: EmojiValue | string): string;
+  toDiscord(emoji: EmojiValue | string): string;
+  
+  matches(rawEmoji: string, normalized: EmojiValue | string): boolean;
+  extend(customMap: EmojiMapConfig): void;
+}
+```
+
+**Example:**
+
+```typescript
+import { defaultEmojiResolver, emoji } from "chat";
+
+// Convert from platform format
+const e1 = defaultEmojiResolver.fromSlack("+1");
+const e2 = defaultEmojiResolver.fromGChat("👍");
+console.log(e1 === e2); // true - both resolve to thumbs_up
+
+// Convert to platform format
+console.log(defaultEmojiResolver.toSlack(emoji.thumbs_up)); // "+1"
+console.log(defaultEmojiResolver.toGChat(emoji.thumbs_up)); // "👍"
+
+// Check if raw emoji matches normalized
+console.log(defaultEmojiResolver.matches("+1", emoji.thumbs_up)); // true
+console.log(defaultEmojiResolver.matches("👍", emoji.thumbs_up)); // true
+```
+
+## getEmoji
+
+Get or create an immutable singleton EmojiValue.
+
+```typescript
+function getEmoji(name: string): EmojiValue;
+```
+
+**Example:**
+
+```typescript
+import { getEmoji } from "chat";
+
+const e1 = getEmoji("thumbs_up");
+const e2 = getEmoji("thumbs_up");
+
+console.log(e1 === e2); // true - same object
+console.log(e1.name); // "thumbs_up"
+```
+
+## convertEmojiPlaceholders
+
+Convert emoji placeholders in text to platform-specific format.
+
+```typescript
+function convertEmojiPlaceholders(
+  text: string,
+  platform: "slack" | "gchat" | "teams" | "discord" | "github" | "linear",
+  resolver?: EmojiResolver
+): string;
+```
+
+**Example:**
+
+```typescript
+import { convertEmojiPlaceholders } from "chat";
+
+const text = "Thanks! {{emoji:thumbs_up}} {{emoji:fire}}";
+
+console.log(convertEmojiPlaceholders(text, "slack"));
+// "Thanks! :+1: :fire:"
+
+console.log(convertEmojiPlaceholders(text, "gchat"));
+// "Thanks! 👍 🔥"
+```
+
+## Usage in Event Handlers
+
+### Reaction Events
+
+```typescript
+import { emoji } from "chat";
+
+// Listen for specific emoji
+chat.onReaction([emoji.thumbs_up, emoji.heart], async (event) => {
+  // Use object identity comparison
+  if (event.emoji === emoji.thumbs_up) {
+    console.log("Thumbs up!");
+  } else if (event.emoji === emoji.heart) {
+    console.log("Heart!");
+  }
+  
+  // Access raw platform format
+  console.log("Raw emoji:", event.rawEmoji);
+});
+
+// Listen for all reactions
+chat.onReaction(async (event) => {
+  console.log(`User reacted with ${event.emoji.name}`);
+});
+```
+
+### Adding Reactions
+
+```typescript
+import { emoji } from "chat";
+
+// Add reaction to a message
+await message.addReaction(emoji.check);
+await message.addReaction(emoji.thumbs_up);
+
+// Remove reaction
+await message.removeReaction(emoji.check);
+
+// Platform-specific format also works
+await message.addReaction(":+1:"); // Slack
+await message.addReaction("👍"); // Google Chat/Teams
+```
+
+## Platform Format Reference
+
+### Slack
+
+- Format: `:emoji_name:`
+- Example: `:+1:`, `:fire:`, `:heart:`
+- Colons are automatically added/removed by the SDK
+
+### Google Chat
+
+- Format: Unicode emoji
+- Example: `👍`, `🔥`, `❤️`
+
+### Teams
+
+- Format: Predefined reaction types
+- Supported: `like`, `heart`, `laugh`, `surprised`, `sad`, `angry`
+- Maps to: `thumbs_up`, `heart`, `laugh`, `surprised`, `sad`, `angry`
+
+### Discord
+
+- Format: Unicode emoji (same as Google Chat)
+- Example: `👍`, `🔥`, `❤️`
+
+## Complete Example
+
+```typescript
+import { emoji, createEmoji } from "chat";
+import type { EmojiFormats } from "chat";
+
+// Extend with custom emoji
+declare module "chat" {
+  interface CustomEmojiMap {
+    priority_high: EmojiFormats;
+    priority_low: EmojiFormats;
+  }
+}
+
+const customEmoji = createEmoji({
+  priority_high: { slack: "red_circle", gchat: "🔴" },
+  priority_low: { slack: "green_circle", gchat: "🟢" }
+});
+
+// Message with emoji
+chat.onNewMention(async (thread, message) => {
+  await thread.post(
+    `${emoji.wave} Hello! Processing your request ${emoji.gear}`
+  );
+  
+  // Do work...
+  
+  await thread.post(
+    `${emoji.check} Done! ${customEmoji.priority_low}`
+  );
+});
+
+// Reaction handling
+chat.onReaction([emoji.thumbs_up, emoji.thumbs_down], async (event) => {
+  if (event.emoji === emoji.thumbs_up) {
+    await event.thread.post(
+      `Thanks for the positive feedback, ${event.user.userName}!`
+    );
+  } else {
+    await event.thread.post(
+      `We'll work on improving. ${emoji.pray}`
+    );
+  }
+});
+
+// Add reactions to messages
+const sent = await thread.post("Ready to deploy?");
+await sent.addReaction(emoji.rocket);
+await sent.addReaction(emoji.check);
+await sent.addReaction(customEmoji.priority_high);
+```

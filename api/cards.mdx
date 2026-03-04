@@ -1,0 +1,442 @@
+---
+title: Card Components
+description: API reference for building rich interactive cards
+---
+
+Card components provide a cross-platform way to create rich, interactive messages. They automatically convert to:
+- **Slack**: Block Kit
+- **Teams**: Adaptive Cards
+- **Google Chat**: Card v2
+
+## Usage
+
+Cards support both **function calls** and **JSX syntax**.
+
+### Function API
+
+```typescript
+import { Card, Text, Actions, Button } from "chat";
+
+await thread.post(
+  Card({
+    title: "Order #1234",
+    children: [
+      Text("Total: $50.00"),
+      Actions([
+        Button({ id: "approve", label: "Approve", style: "primary" }),
+        Button({ id: "reject", label: "Reject", style: "danger" })
+      ])
+    ]
+  })
+);
+```
+
+### JSX API
+
+Requires `jsxImportSource: "chat"` in tsconfig.json.
+
+```tsx
+/** @jsxImportSource chat */
+import { Card, Text, Actions, Button } from "chat";
+
+await thread.post(
+  <Card title="Order #1234">
+    <Text>Total: $50.00</Text>
+    <Actions>
+      <Button id="approve" style="primary">Approve</Button>
+      <Button id="reject" style="danger">Reject</Button>
+    </Actions>
+  </Card>
+);
+```
+
+## Card
+
+Root container for card content.
+
+<ParamField path="title" type="string">
+  Card title (displayed as header)
+</ParamField>
+
+<ParamField path="subtitle" type="string">
+  Card subtitle (displayed below title)
+</ParamField>
+
+<ParamField path="imageUrl" type="string">
+  Header image URL
+</ParamField>
+
+<ParamField path="children" type="CardChild[]">
+  Card content elements
+</ParamField>
+
+### CardOptions Type
+
+```typescript
+interface CardOptions {
+  title?: string;
+  subtitle?: string;
+  imageUrl?: string;
+  children?: CardChild[];
+}
+
+function Card(options: CardOptions): CardElement;
+```
+
+## Text
+
+Text content element.
+
+<ParamField path="content" type="string" required>
+  Text content (supports markdown on some platforms)
+</ParamField>
+
+<ParamField path="style" type="'plain' | 'bold' | 'muted'">
+  Text style
+</ParamField>
+
+```typescript
+function Text(
+  content: string,
+  options?: { style?: "plain" | "bold" | "muted" }
+): TextElement;
+
+// Alias that avoids DOM Text constructor conflict
+const CardText = Text;
+```
+
+**Example:**
+
+```typescript
+Text("Hello, world!")
+Text("Important", { style: "bold" })
+Text("Note", { style: "muted" })
+```
+
+## Image
+
+Image element.
+
+<ParamField path="url" type="string" required>
+  Image URL
+</ParamField>
+
+<ParamField path="alt" type="string">
+  Alt text for accessibility
+</ParamField>
+
+```typescript
+function Image(options: { url: string; alt?: string }): ImageElement;
+```
+
+**Example:**
+
+```typescript
+Image({ url: "https://example.com/image.png", alt: "Description" })
+```
+
+## Divider
+
+Visual divider/separator.
+
+```typescript
+function Divider(): DividerElement;
+```
+
+**Example:**
+
+```typescript
+Card({
+  children: [
+    Text("Section 1"),
+    Divider(),
+    Text("Section 2")
+  ]
+})
+```
+
+## Section
+
+Container for grouping elements.
+
+```typescript
+function Section(children: CardChild[]): SectionElement;
+```
+
+**Example:**
+
+```typescript
+Section([
+  Text("Grouped content"),
+  Image({ url: "..." })
+])
+```
+
+## Actions
+
+Container for buttons and selects.
+
+```typescript
+function Actions(
+  children: (
+    | ButtonElement
+    | LinkButtonElement
+    | SelectElement
+    | RadioSelectElement
+  )[]
+): ActionsElement;
+```
+
+**Example:**
+
+```typescript
+Actions([
+  Button({ id: "ok", label: "OK" }),
+  Button({ id: "cancel", label: "Cancel" }),
+  LinkButton({ url: "https://example.com", label: "Learn More" })
+])
+```
+
+## Button
+
+Interactive button that triggers an action.
+
+<ParamField path="id" type="string" required>
+  Unique action ID for callback routing
+</ParamField>
+
+<ParamField path="label" type="string" required>
+  Button label text
+</ParamField>
+
+<ParamField path="style" type="'primary' | 'danger' | 'default'">
+  Visual style
+</ParamField>
+
+<ParamField path="value" type="string">
+  Optional payload value sent with action callback
+</ParamField>
+
+<ParamField path="disabled" type="boolean">
+  If true, button is displayed inactive and doesn't respond to clicks
+</ParamField>
+
+```typescript
+interface ButtonOptions {
+  id: string;
+  label: string;
+  style?: "primary" | "danger" | "default";
+  value?: string;
+  disabled?: boolean;
+}
+
+function Button(options: ButtonOptions): ButtonElement;
+```
+
+**Example:**
+
+```typescript
+Button({ id: "submit", label: "Submit", style: "primary" })
+Button({ id: "delete", label: "Delete", style: "danger", value: "item-123" })
+Button({ id: "unavailable", label: "Unavailable", disabled: true })
+```
+
+## LinkButton
+
+Button that opens a URL when clicked.
+
+<ParamField path="url" type="string" required>
+  URL to open when clicked
+</ParamField>
+
+<ParamField path="label" type="string" required>
+  Button label text
+</ParamField>
+
+<ParamField path="style" type="'primary' | 'danger' | 'default'">
+  Visual style
+</ParamField>
+
+```typescript
+interface LinkButtonOptions {
+  url: string;
+  label: string;
+  style?: "primary" | "danger" | "default";
+}
+
+function LinkButton(options: LinkButtonOptions): LinkButtonElement;
+```
+
+**Example:**
+
+```typescript
+LinkButton({ url: "https://example.com", label: "View Docs" })
+LinkButton({ url: "https://example.com", label: "Learn More", style: "primary" })
+```
+
+## Field
+
+Key-value pair for displaying structured data.
+
+<ParamField path="label" type="string" required>
+  Field label
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  Field value
+</ParamField>
+
+```typescript
+function Field(options: { label: string; value: string }): FieldElement;
+```
+
+**Example:**
+
+```typescript
+Field({ label: "Status", value: "Active" })
+```
+
+## Fields
+
+Container for multi-column field layout.
+
+```typescript
+function Fields(children: FieldElement[]): FieldsElement;
+```
+
+**Example:**
+
+```typescript
+Fields([
+  Field({ label: "Name", value: "John" }),
+  Field({ label: "Email", value: "john@example.com" }),
+  Field({ label: "Status", value: "Active" })
+])
+```
+
+## Table
+
+Structured data table.
+
+<ParamField path="headers" type="string[]" required>
+  Column header labels
+</ParamField>
+
+<ParamField path="rows" type="string[][]" required>
+  Data rows (each row is an array of cell strings)
+</ParamField>
+
+<ParamField path="align" type="('left' | 'center' | 'right')[]">
+  Column alignment
+</ParamField>
+
+```typescript
+interface TableOptions {
+  headers: string[];
+  rows: string[][];
+  align?: ("left" | "center" | "right")[];
+}
+
+function Table(options: TableOptions): TableElement;
+```
+
+**Example:**
+
+```typescript
+Table({
+  headers: ["Name", "Age", "Role"],
+  rows: [
+    ["Alice", "30", "Engineer"],
+    ["Bob", "25", "Designer"]
+  ],
+  align: ["left", "right", "left"]
+})
+```
+
+## CardLink
+
+Inline hyperlink element.
+
+<ParamField path="url" type="string" required>
+  URL to link to
+</ParamField>
+
+<ParamField path="label" type="string" required>
+  Link label text
+</ParamField>
+
+```typescript
+function CardLink(options: { url: string; label: string }): LinkElement;
+```
+
+**Example:**
+
+```typescript
+CardLink({ url: "https://example.com", label: "Visit Site" })
+```
+
+## Complete Example
+
+```typescript
+import { Card, Text, Image, Divider, Fields, Field, Actions, Button, LinkButton } from "chat";
+
+await thread.post(
+  Card({
+    title: "Order Confirmation",
+    subtitle: "Order #1234",
+    imageUrl: "https://example.com/product.png",
+    children: [
+      Text("Your order has been received", { style: "bold" }),
+      Divider(),
+      Fields([
+        Field({ label: "Item", value: "Widget Pro" }),
+        Field({ label: "Quantity", value: "2" }),
+        Field({ label: "Total", value: "$50.00" })
+      ]),
+      Divider(),
+      Actions([
+        Button({ id: "track", label: "Track Order", style: "primary" }),
+        Button({ id: "cancel", label: "Cancel", style: "danger" }),
+        LinkButton({ url: "https://example.com/help", label: "Help" })
+      ])
+    ]
+  })
+);
+```
+
+## Type Definitions
+
+```typescript
+type CardChild =
+  | TextElement
+  | ImageElement
+  | DividerElement
+  | ActionsElement
+  | SectionElement
+  | FieldsElement
+  | LinkElement
+  | TableElement;
+
+interface CardElement {
+  type: "card";
+  title?: string;
+  subtitle?: string;
+  imageUrl?: string;
+  children: CardChild[];
+}
+
+interface TextElement {
+  type: "text";
+  content: string;
+  style?: "plain" | "bold" | "muted";
+}
+
+interface ButtonElement {
+  type: "button";
+  id: string;
+  label: string;
+  style?: "primary" | "danger" | "default";
+  value?: string;
+  disabled?: boolean;
+}
+```

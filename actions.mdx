@@ -1,0 +1,291 @@
+---
+title: Button Actions and Interactions
+description: Handle button clicks, link buttons, and interactive elements in your cards
+---
+
+# Button Actions and Interactions
+
+Add interactivity to your cards with buttons and action handlers. The SDK automatically routes button clicks to your registered handlers.
+
+## Button Types
+
+### Action Button
+
+Triggers a callback handler when clicked.
+
+```typescript
+interface ButtonElement {
+  type: "button";
+  id: string;              // Unique action ID for routing
+  label: string;           // Button text
+  style?: "primary" | "danger" | "default";
+  value?: string;          // Optional payload
+  disabled?: boolean;      // Inactive state
+}
+```
+
+**JSX Example:**
+
+```tsx
+<Actions>
+  <Button id="approve" style="primary">Approve</Button>
+  <Button id="reject" style="danger">Reject</Button>
+  <Button id="info" disabled>Not Available</Button>
+</Actions>
+```
+
+**Function Example:**
+
+```typescript
+Actions([
+  Button({ id: "approve", label: "Approve", style: "primary" }),
+  Button({ id: "reject", label: "Reject", style: "danger" }),
+  Button({ id: "delete", label: "Delete", value: "item-123" }),
+])
+```
+
+### Link Button
+
+Opens a URL when clicked (no callback handler).
+
+```typescript
+interface LinkButtonElement {
+  type: "link-button";
+  url: string;
+  label: string;
+  style?: "primary" | "danger" | "default";
+}
+```
+
+**Example:**
+
+```tsx
+<Actions>
+  <LinkButton url="https://docs.example.com" label="View Docs" />
+  <LinkButton 
+    url="https://example.com/dashboard" 
+    label="Open Dashboard"
+    style="primary"
+  />
+</Actions>
+```
+
+## Handling Button Clicks
+
+Register handlers for button actions using the action ID:
+
+```typescript
+import { Chat } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+// Handle a specific action
+chat.onAction("approve", async (event) => {
+  await event.thread.post(
+    `Order approved by ${event.user.userName}! ✓`
+  );
+});
+
+// Handle multiple actions
+chat.onAction(["approve", "reject"], async (event) => {
+  if (event.actionId === "approve") {
+    await event.thread.post("✓ Approved");
+  } else {
+    await event.thread.post("✗ Rejected");
+  }
+});
+```
+
+## Action Event
+
+Handlers receive an `ActionEvent` with full context:
+
+```typescript
+interface ActionEvent {
+  actionId: string;        // Button's id
+  value?: string;          // Button's value payload
+  user: Author;            // Who clicked
+  thread: Thread;          // Where it happened
+  threadId: string;
+  messageId: string;       // Message containing the button
+  triggerId?: string;      // For opening modals
+  adapter: Adapter;        // Platform adapter
+  raw: unknown;            // Platform-specific data
+  
+  // Open a modal in response
+  openModal(modal: ModalElement): Promise<{ viewId: string } | undefined>;
+}
+```
+
+## Using Button Values
+
+Pass data through button clicks with the `value` field:
+
+```tsx
+// Post a card with order ID in button value
+await thread.post(
+  <Card title="Order #1234">
+    <Text>Total: $50.00</Text>
+    <Actions>
+      <Button id="approve" value="order-1234">Approve</Button>
+      <Button id="reject" value="order-1234">Reject</Button>
+    </Actions>
+  </Card>
+);
+
+// Handler receives the value
+chat.onAction("approve", async (event) => {
+  const orderId = event.value; // "order-1234"
+  
+  // Process the order
+  await processOrder(orderId);
+  
+  await event.thread.post(`Order ${orderId} has been approved!`);
+});
+```
+
+## Catch-All Handler
+
+Handle all button clicks with a single handler:
+
+```typescript
+chat.onAction(async (event) => {
+  console.log(`Action: ${event.actionId}`);
+  console.log(`User: ${event.user.userName}`);
+  console.log(`Value: ${event.value}`);
+});
+```
+
+## Actions Container
+
+Buttons must be wrapped in an `Actions` container:
+
+```typescript
+interface ActionsElement {
+  type: "actions";
+  children: (
+    | ButtonElement
+    | LinkButtonElement
+    | SelectElement         // From modals
+    | RadioSelectElement    // From modals
+  )[];
+}
+```
+
+**Example with mixed elements:**
+
+```tsx
+<Actions>
+  <Button id="save" style="primary">Save</Button>
+  <Button id="cancel">Cancel</Button>
+  <LinkButton url="https://example.com" label="Learn More" />
+</Actions>
+```
+
+## Updating Messages After Actions
+
+Edit the message that contained the button:
+
+```typescript
+chat.onAction("approve", async (event) => {
+  // Get the message that contained the button
+  const message = await event.adapter.fetchMessage(
+    event.threadId,
+    event.messageId
+  );
+  
+  if (message) {
+    // Create a SentMessage to enable editing
+    const sentMessage = event.thread.createSentMessageFromMessage(message);
+    
+    // Update the card
+    await sentMessage.edit(
+      <Card title="Order #1234">
+        <Text style="bold">✓ Approved by {event.user.userName}</Text>
+        <Text style="muted">Action completed</Text>
+      </Card>
+    );
+  }
+});
+```
+
+## Complete Example
+
+Approval workflow with status updates:
+
+```typescript
+import { Chat, Card, Text, Fields, Field, Actions, Button } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+// Post approval request
+chat.onNewMention(async (thread, message) => {
+  const orderId = "ORD-" + Date.now();
+  
+  await thread.post(
+    <Card title="New Order Approval">
+      <Fields>
+        <Field label="Order ID" value={orderId} />
+        <Field label="Amount" value="$50.00" />
+        <Field label="Requested by" value={message.author.userName} />
+      </Fields>
+      <Actions>
+        <Button id="approve" value={orderId} style="primary">
+          Approve
+        </Button>
+        <Button id="reject" value={orderId} style="danger">
+          Reject
+        </Button>
+      </Actions>
+    </Card>
+  );
+});
+
+// Handle approval
+chat.onAction("approve", async (event) => {
+  const orderId = event.value;
+  
+  await event.thread.post(
+    `✓ Order ${orderId} approved by ${event.user.userName}`
+  );
+  
+  // Process approval in your system
+  await approveOrder(orderId);
+});
+
+// Handle rejection
+chat.onAction("reject", async (event) => {
+  const orderId = event.value;
+  
+  await event.thread.post(
+    `✗ Order ${orderId} rejected by ${event.user.userName}`
+  );
+});
+```
+
+## Button Styles
+
+Three visual styles are available:
+
+- `primary` - Blue/prominent (Slack: primary, Teams: accent)
+- `danger` - Red/destructive (Slack: danger, Teams: destructive)
+- `default` - Gray/secondary (default if not specified)
+
+```tsx
+<Actions>
+  <Button id="save" style="primary">Save Changes</Button>
+  <Button id="delete" style="danger">Delete</Button>
+  <Button id="cancel" style="default">Cancel</Button>
+</Actions>
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Modals" icon="window-restore" href="/modals">
+    Open forms and dialogs from button clicks
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/error-handling">
+    Handle failures in action handlers
+  </Card>
+</CardGroup>

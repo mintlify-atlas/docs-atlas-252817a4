@@ -1,0 +1,436 @@
+---
+title: Handling Events
+description: Event patterns and handler registration in the Chat SDK
+---
+
+The Chat SDK provides a comprehensive event system for responding to messages, reactions, button clicks, slash commands, and more.
+
+## Event Handler Types
+
+The SDK distinguishes between different types of events based on subscription state and message patterns:
+
+### Message Events
+
+<CardGroup cols={2}>
+  <Card title="onNewMention" icon="at">
+    Triggered when the bot is @-mentioned in an **unsubscribed** thread
+  </Card>
+  <Card title="onSubscribedMessage" icon="bell">
+    Triggered for all messages in **subscribed** threads
+  </Card>
+  <Card title="onNewMessage" icon="message">
+    Triggered when a message matches a regex pattern
+  </Card>
+</CardGroup>
+
+<Warning>
+`onNewMention` is **ONLY** called for mentions in **unsubscribed** threads. Once subscribed, all messages (including @-mentions) go to `onSubscribedMessage` handlers.
+</Warning>
+
+### Interactive Events
+
+<CardGroup cols={2}>
+  <Card title="onReaction" icon="face-smile">
+    Triggered when a user adds/removes a reaction emoji
+  </Card>
+  <Card title="onAction" icon="hand-pointer">
+    Triggered when a user clicks a button in a card
+  </Card>
+  <Card title="onSlashCommand" icon="slash">
+    Triggered when a user invokes a slash command
+  </Card>
+  <Card title="onModalSubmit" icon="square-check">
+    Triggered when a user submits a modal form
+  </Card>
+</CardGroup>
+
+## Mention Handlers
+
+### Basic Mention Handling
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  await thread.post(`Hello ${message.author.userName}!`);
+});
+```
+
+### Subscribing to Threads
+
+The typical pattern is to subscribe when first mentioned:
+
+```typescript
+chat.onNewMention(async (thread, message) => {
+  // Subscribe to follow-up messages
+  await thread.subscribe();
+  await thread.post("I'll be watching this thread!");
+});
+
+chat.onSubscribedMessage(async (thread, message) => {
+  // Handle all messages in subscribed threads
+  if (message.isMention) {
+    await thread.post("You mentioned me again!");
+  } else {
+    await thread.post(`Got your message: ${message.text}`);
+  }
+});
+```
+
+<Info>
+The **initial message that triggered subscription** does NOT fire `onSubscribedMessage`. Only subsequent messages trigger subscribed handlers.
+</Info>
+
+## Pattern-Based Message Handlers
+
+Match messages using regular expressions:
+
+```typescript
+// Match messages starting with "!help"
+chat.onNewMessage(/^!help/, async (thread, message) => {
+  await thread.post("Available commands: !help, !status, !ping");
+});
+
+// Match "hello" (case-insensitive)
+chat.onNewMessage(/hello/i, async (thread, message) => {
+  await thread.post("Hi there!");
+});
+
+// Extract data from patterns
+chat.onNewMessage(/^!remind (.+)/, async (thread, message) => {
+  const match = message.text.match(/^!remind (.+)/);
+  const reminder = match?.[1];
+  await thread.post(`I'll remind you: ${reminder}`);
+});
+```
+
+## Reaction Handlers
+
+React to emoji reactions on messages:
+
+```typescript
+import { emoji } from "chat";
+
+// Handle specific emoji (recommended)
+chat.onReaction([emoji.thumbs_up, emoji.heart], async (event) => {
+  if (event.added) {
+    await event.thread.post(`Thanks for the ${event.emoji}!`);
+  }
+});
+
+// Handle all reactions (catch-all)
+chat.onReaction(async (event) => {
+  console.log(`${event.user.userName} ${event.added ? "added" : "removed"} ${event.emoji.name}`);
+});
+```
+
+### Reaction Event Structure
+
+```typescript
+interface ReactionEvent {
+  adapter: Adapter;          // Platform adapter
+  added: boolean;            // true = added, false = removed
+  emoji: EmojiValue;         // Normalized emoji object
+  rawEmoji: string;          // Platform-specific emoji string
+  message?: Message;         // The message that was reacted to
+  messageId: string;         // Message ID
+  thread: Thread;            // Thread where reaction occurred
+  threadId: string;          // Thread ID
+  user: Author;              // User who reacted
+  raw: unknown;              // Platform-specific event data
+}
+```
+
+<Tip>
+Use `emoji` constants for cross-platform emoji support. They work consistently across Slack, Google Chat, Teams, and Discord.
+</Tip>
+
+## Action Handlers (Button Clicks)
+
+Handle button clicks from interactive cards:
+
+```typescript
+import { Card, Button } from "chat";
+
+// Post a card with buttons
+chat.onNewMention(async (thread, message) => {
+  await thread.post(
+    <Card title="Choose an option">
+      <Button id="approve" value="order-123">Approve</Button>
+      <Button id="reject" value="order-123">Reject</Button>
+    </Card>
+  );
+});
+
+// Handle specific action
+chat.onAction("approve", async (event) => {
+  await event.thread.post(`Order ${event.value} approved by ${event.user.userName}`);
+});
+
+// Handle multiple actions
+chat.onAction(["approve", "reject"], async (event) => {
+  if (event.actionId === "approve") {
+    await event.thread.post("Approved!");
+  } else {
+    await event.thread.post("Rejected!");
+  }
+});
+
+// Handle all actions (catch-all)
+chat.onAction(async (event) => {
+  console.log(`Action: ${event.actionId}, Value: ${event.value}`);
+});
+```
+
+### Action Event Structure
+
+```typescript
+interface ActionEvent {
+  actionId: string;          // The action ID from the button
+  adapter: Adapter;          // Platform adapter
+  messageId: string;         // Message containing the card
+  thread: Thread;            // Thread where action occurred
+  threadId: string;          // Thread ID
+  triggerId?: string;        // For opening modals (time-limited)
+  user: Author;              // User who clicked
+  value?: string;            // Optional value/payload from button
+  raw: unknown;              // Platform-specific event data
+  
+  // Open a modal in response to this action
+  openModal(modal: ModalElement | CardJSXElement): Promise<{ viewId: string } | undefined>;
+}
+```
+
+## Slash Command Handlers
+
+Handle slash commands like `/help` or `/status`:
+
+```typescript
+// Handle a specific command
+chat.onSlashCommand("/help", async (event) => {
+  await event.channel.post("Available commands: /help, /status, /ping");
+});
+
+// Handle multiple commands
+chat.onSlashCommand(["/status", "/health"], async (event) => {
+  await event.channel.post("All systems operational!");
+});
+
+// Handle with arguments
+chat.onSlashCommand("/search", async (event) => {
+  const query = event.text; // Text after the command
+  await event.channel.post(`Searching for: ${query}`);
+});
+
+// Ephemeral response (only user sees it)
+chat.onSlashCommand("/secret", async (event) => {
+  await event.channel.postEphemeral(
+    event.user,
+    "This is just for you!",
+    { fallbackToDM: false }
+  );
+});
+
+// Catch-all handler
+chat.onSlashCommand(async (event) => {
+  console.log(`Command: ${event.command}, Args: ${event.text}`);
+});
+```
+
+### Slash Command Event Structure
+
+```typescript
+interface SlashCommandEvent {
+  adapter: Adapter;          // Platform adapter
+  channel: Channel;          // Channel where command was invoked
+  command: string;           // Command name (e.g., "/help")
+  text: string;              // Arguments after the command
+  triggerId?: string;        // For opening modals (time-limited)
+  user: Author;              // User who invoked command
+  raw: unknown;              // Platform-specific event data
+  
+  // Open a modal in response to this command
+  openModal(modal: ModalElement | CardJSXElement): Promise<{ viewId: string } | undefined>;
+}
+```
+
+<Note>
+Slash commands are invoked at the **channel level**, so you get a `Channel` object instead of a `Thread`.
+</Note>
+
+## Modal Handlers
+
+Handle modal form submissions and closures:
+
+```typescript
+import { Modal, TextInput } from "chat";
+
+// Open a modal from a slash command
+chat.onSlashCommand("/feedback", async (event) => {
+  await event.openModal(
+    <Modal callbackId="feedback_modal" title="Submit Feedback">
+      <TextInput id="feedback" label="Your feedback" required />
+    </Modal>
+  );
+});
+
+// Handle modal submission
+chat.onModalSubmit("feedback_modal", async (event) => {
+  const feedback = event.values.feedback;
+  
+  // Access the related thread/channel (if modal was opened from a message)
+  if (event.relatedThread) {
+    await event.relatedThread.post(`Thanks for the feedback: ${feedback}`);
+  }
+  
+  // Return validation errors
+  if (feedback.length < 10) {
+    return {
+      action: "errors",
+      errors: { feedback: "Please provide more detail" }
+    };
+  }
+  
+  // Close the modal
+  return { action: "close" };
+});
+
+// Handle modal close (requires notifyOnClose: true)
+chat.onModalClose("feedback_modal", async (event) => {
+  console.log(`User ${event.user.userName} closed the feedback modal`);
+});
+```
+
+### Modal Response Types
+
+```typescript
+// Close the modal
+return { action: "close" };
+
+// Show validation errors
+return {
+  action: "errors",
+  errors: {
+    fieldId: "Error message"
+  }
+};
+
+// Update the modal with new content
+return {
+  action: "update",
+  modal: newModalElement
+};
+
+// Push a new modal (stack)
+return {
+  action: "push",
+  modal: newModalElement
+};
+```
+
+## Event Flow and Deduplication
+
+The SDK handles common concerns automatically:
+
+### Deduplication
+
+Messages can arrive via multiple paths (e.g., Slack sends both `message` and `app_mention` events):
+
+```typescript
+// From chat.ts
+const dedupeKey = `dedupe:${adapter.name}:${message.id}`;
+const alreadyProcessed = await this._stateAdapter.get<boolean>(dedupeKey);
+if (alreadyProcessed) {
+  this.logger.debug("Skipping duplicate message");
+  return;
+}
+await this._stateAdapter.set(dedupeKey, true, this._dedupeTtlMs);
+```
+
+<Info>
+Default deduplication TTL is **5 minutes**. Adjust with `dedupeTtlMs` in `ChatConfig`.
+</Info>
+
+### Bot Message Filtering
+
+Messages from the bot itself are automatically skipped:
+
+```typescript
+// From chat.ts
+if (message.author.isMe) {
+  this.logger.debug("Skipping message from self (isMe=true)");
+  return;
+}
+```
+
+### Thread Locking
+
+Only one instance processes a thread at a time:
+
+```typescript
+// From chat.ts
+const lock = await this._stateAdapter.acquireLock(threadId, DEFAULT_LOCK_TTL_MS);
+if (!lock) {
+  throw new LockError(`Could not acquire lock on thread ${threadId}`);
+}
+
+try {
+  // Process message...
+} finally {
+  await this._stateAdapter.releaseLock(lock);
+}
+```
+
+## Background Processing
+
+Use `waitUntil` for fast webhook responses:
+
+```typescript
+import { after } from "next/server";
+
+// Next.js App Router
+export async function POST(request: Request) {
+  return await chat.webhooks.slack(request, {
+    waitUntil: (p) => after(() => p)
+  });
+}
+```
+
+```typescript
+import { waitUntil } from "@vercel/functions";
+
+// Vercel Functions
+export async function POST(request: Request) {
+  return await chat.webhooks.slack(request, { waitUntil });
+}
+```
+
+<Warning>
+Without `waitUntil`, webhook processing blocks the response. Platforms may retry if the response takes too long.
+</Warning>
+
+## Error Handling
+
+Handlers are wrapped with automatic error catching:
+
+```typescript
+// From chat.ts
+processMessage(
+  adapter: Adapter,
+  threadId: string,
+  message: Message,
+  options?: WebhookOptions
+): void {
+  const task = (async () => {
+    await this.handleIncomingMessage(adapter, threadId, message);
+  })().catch((err) => {
+    this.logger.error("Message processing error", { error: err, threadId });
+  });
+
+  if (options?.waitUntil) {
+    options.waitUntil(task);
+  }
+}
+```
+
+<Tip>
+Errors in handlers are logged but don't crash the application. Use structured logging for debugging.
+</Tip>

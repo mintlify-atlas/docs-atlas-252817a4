@@ -1,0 +1,339 @@
+---
+title: Slack Adapter
+description: Connect the Chat SDK to Slack workspaces with full multi-workspace support
+---
+
+## Installation
+
+```bash
+npm install @chat-adapter/slack
+```
+
+## Environment Variables
+
+<Note>
+  Get these credentials from your [Slack app dashboard](https://api.slack.com/apps).
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SLACK_BOT_TOKEN` | Single-workspace only | Bot User OAuth Token (`xoxb-...`) |
+| `SLACK_SIGNING_SECRET` | Yes | Webhook verification secret |
+| `SLACK_CLIENT_ID` | Multi-workspace only | OAuth Client ID for app installation |
+| `SLACK_CLIENT_SECRET` | Multi-workspace only | OAuth Client Secret |
+
+## Configuration Options
+
+```typescript
+interface SlackAdapterConfig {
+  /** Bot token (xoxb-...). Required for single-workspace mode. Omit for multi-workspace. */
+  botToken?: string;
+  /** Bot user ID (will be fetched if not provided) */
+  botUserId?: string;
+  /** Slack app client ID (required for OAuth / multi-workspace) */
+  clientId?: string;
+  /** Slack app client secret (required for OAuth / multi-workspace) */
+  clientSecret?: string;
+  /** Base64-encoded 32-byte AES-256-GCM encryption key for encrypting stored tokens */
+  encryptionKey?: string;
+  /** Prefix for state keys storing installations (default: 'slack:installation') */
+  installationKeyPrefix?: string;
+  /** Logger instance */
+  logger: Logger;
+  /** Signing secret for webhook verification */
+  signingSecret: string;
+  /** Override bot username (optional) */
+  userName?: string;
+}
+```
+
+## Setup
+
+<Tabs>
+  <Tab title="Single-Workspace">
+    For internal bots serving one workspace:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createSlackAdapter } from '@chat-adapter/slack';
+    import { MemoryState } from '@chat-adapter/state-memory';
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: {
+        slack: createSlackAdapter({
+          botToken: process.env.SLACK_BOT_TOKEN!,
+          signingSecret: process.env.SLACK_SIGNING_SECRET!,
+        }),
+      },
+      state: new MemoryState(),
+    });
+
+    await chat.initialize();
+    ```
+  </Tab>
+
+  <Tab title="Multi-Workspace">
+    For public apps that users can install in any workspace:
+
+    ```typescript
+    import { Chat } from 'chat';
+    import { createSlackAdapter } from '@chat-adapter/slack';
+    import { RedisState } from '@chat-adapter/state-redis';
+
+    const slack = createSlackAdapter({
+      // No botToken - will be resolved per-workspace
+      clientId: process.env.SLACK_CLIENT_ID!,
+      clientSecret: process.env.SLACK_CLIENT_SECRET!,
+      signingSecret: process.env.SLACK_SIGNING_SECRET!,
+      // Optional: encrypt tokens at rest
+      encryptionKey: process.env.SLACK_ENCRYPTION_KEY,
+    });
+
+    const chat = new Chat({
+      userName: 'my-bot',
+      adapters: { slack },
+      state: new RedisState({ url: process.env.REDIS_URL }),
+    });
+
+    await chat.initialize();
+    ```
+
+    <Warning>
+      Multi-workspace mode requires a persistent StateAdapter like Redis.
+      In-memory state will lose installations on restart.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## OAuth Flow (Multi-Workspace)
+
+For multi-workspace apps, handle the OAuth callback:
+
+```typescript
+// Route: /slack/oauth/callback
+app.get('/slack/oauth/callback', async (req, res) => {
+  const { teamId, installation } = await slack.handleOAuthCallback(req);
+  
+  res.send(`Installed to workspace ${installation.teamName}!`);
+});
+```
+
+The adapter automatically:
+1. Exchanges the authorization code for an access token
+2. Stores the installation via `StateAdapter.set()`
+3. Encrypts the token if `encryptionKey` is provided
+
+## Webhook Handler
+
+```typescript
+app.post('/webhooks/slack', async (req, res) => {
+  const response = await slack.handleWebhook(req, {
+    waitUntil: (promise) => {/* handle async work */},
+  });
+  res.status(response.status).send(await response.text());
+});
+```
+
+## Features
+
+### Supported Events
+
+- `message` - Regular messages in channels/DMs
+- `app_mention` - Bot mentions (@bot-name)
+- `reaction_added` / `reaction_removed` - Emoji reactions
+- `assistant_thread_started` - Slack AI Assistant thread created
+- `app_home_opened` - User opens bot's Home tab
+- `member_joined_channel` - User/bot joins a channel
+
+### Slash Commands
+
+```typescript
+chat.onSlashCommand('/deploy', async (event) => {
+  await event.channel.post(`Deploying ${event.text}...`);
+});
+```
+
+### Interactive Components
+
+Button clicks are automatically routed to `chat.onAction()`:
+
+```typescript
+chat.onAction('approve_button', async (event) => {
+  await event.thread.post('Approved!');
+});
+```
+
+### Modals
+
+<Warning>
+  Modals are not yet fully implemented in the SDK. Use `publishHomeView()` for Home tab views.
+</Warning>
+
+### Home Tab
+
+Publish a custom Home tab view:
+
+```typescript
+await slack.publishHomeView(userId, {
+  type: 'home',
+  blocks: [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: 'Welcome to *My Bot*!' },
+    },
+  ],
+});
+```
+
+### Slack Assistant API
+
+For [Slack AI](https://api.slack.com/docs/apps/ai) features:
+
+```typescript
+// Set suggested prompts
+await slack.setSuggestedPrompts(
+  channelId,
+  threadTs,
+  [
+    { title: 'Summarize', message: '/summarize this thread' },
+    { title: 'Help', message: 'What can you do?' },
+  ],
+  'Quick actions'
+);
+
+// Show thinking indicator
+await slack.setAssistantStatus(channelId, threadTs, 'is thinking...');
+
+// Set thread title (appears in History)
+await slack.setAssistantTitle(channelId, threadTs, 'Q&A about deployment');
+```
+
+## Thread IDs
+
+Slack thread IDs encode channel and message timestamp:
+
+```
+slack:{channelId}:{threadTs}
+```
+
+Examples:
+- Channel message: `slack:C1234567890:1234567890.123456`
+- DM (top-level): `slack:D9876543210:` (empty threadTs for DM roots)
+- DM reply: `slack:D9876543210:1234567890.123456`
+
+## Platform Limits
+
+- **Message length**: 40,000 characters (Block Kit) or 4,000 characters (plain text)
+- **Blocks per message**: 50 blocks
+- **Rate limits**: Tier-based (1+ requests/second for most methods)
+- **File size**: 1 GB per file
+
+See [Slack rate limits](https://api.slack.com/docs/rate-limits) for details.
+
+## Code Examples
+
+<CodeGroup>
+  ```typescript Mention Handler
+  chat.onNewMention(async (event) => {
+    await event.thread.post(`Hi ${event.message.author.userName}!`);
+  });
+  ```
+
+  ```typescript Reaction Handler
+  chat.onReaction(async (event) => {
+    if (event.emoji.name === 'white_check_mark') {
+      await event.thread.post('Task marked complete!');
+    }
+  });
+  ```
+
+  ```typescript File Upload
+  import { readFileSync } from 'fs';
+
+  await thread.post({
+    text: 'Here is the report',
+    files: [{
+      filename: 'report.pdf',
+      data: readFileSync('./report.pdf'),
+      mimeType: 'application/pdf',
+    }],
+  });
+  ```
+
+  ```typescript Block Kit Card
+  import { Card, Section, Button } from 'chat/cards';
+
+  await thread.post(
+    <Card title="Deploy to Production">
+      <Section text="Ready to deploy v2.1.0?" />
+      <Button actionId="deploy_prod" style="primary">Deploy</Button>
+      <Button actionId="cancel">Cancel</Button>
+    </Card>
+  );
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook verification fails">
+    - Ensure `SLACK_SIGNING_SECRET` matches your app configuration
+    - Check that the request body is raw (not parsed JSON)
+    - Verify timestamp is within 5 minutes (check server clock)
+  </Accordion>
+
+  <Accordion title="Bot doesn't respond to messages">
+    - Add bot to the channel (`/invite @bot-name`)
+    - Verify bot has `chat:write` scope
+    - Check webhook URL is publicly accessible
+    - Enable `message.channels` event subscription
+  </Accordion>
+
+  <Accordion title="Multi-workspace mode not working">
+    - Use a persistent StateAdapter (Redis, not Memory)
+    - Ensure OAuth redirect URL is whitelisted in app settings
+    - Check that installations are being saved (debug logs)
+  </Accordion>
+</AccordionGroup>
+
+## Required Scopes
+
+Add these OAuth scopes to your Slack app:
+
+**Bot Token Scopes:**
+- `chat:write` - Post messages
+- `reactions:write` - Add reactions
+- `channels:history` - Read channel messages
+- `groups:history` - Read private channel messages
+- `im:history` - Read DM messages
+- `mpim:history` - Read group DM messages
+- `users:read` - Look up user info
+
+**Event Subscriptions:**
+- `message.channels`
+- `message.groups`
+- `message.im`
+- `message.mpim`
+- `app_mention`
+- `reaction_added`
+- `reaction_removed`
+
+See [Slack permissions](https://api.slack.com/scopes) for full scope list.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Message Handling" icon="message" href="/core-concepts/messages">
+    Process messages and build conversation flows
+  </Card>
+  <Card title="Block Kit Cards" icon="sparkles" href="/features/cards">
+    Create interactive UIs with buttons and forms
+  </Card>
+  <Card title="Multi-Workspace Apps" icon="users" href="/guides/multi-tenant">
+    Build apps for public distribution
+  </Card>
+  <Card title="State Management" icon="database" href="/core-concepts/state">
+    Persist data across requests
+  </Card>
+</CardGroup>

@@ -1,0 +1,515 @@
+---
+title: Core Types
+description: TypeScript types and interfaces used throughout Chat SDK
+---
+
+Chat SDK is fully typed with TypeScript. This page documents the core types and interfaces you'll encounter when building with the SDK.
+
+## Message Types
+
+### Author
+
+Information about a message author.
+
+```typescript
+interface Author {
+  userId: string;
+  userName: string;
+  fullName: string;
+  isBot: boolean | "unknown";
+  isMe: boolean;
+}
+```
+
+<ParamField path="userId" type="string" required>
+  Platform-specific unique user ID
+</ParamField>
+
+<ParamField path="userName" type="string" required>
+  Username/handle for mentions
+</ParamField>
+
+<ParamField path="fullName" type="string" required>
+  Display name
+</ParamField>
+
+<ParamField path="isBot" type="boolean | 'unknown'" required>
+  Whether the author is a bot (or unknown if platform doesn't provide this)
+</ParamField>
+
+<ParamField path="isMe" type="boolean" required>
+  Whether the author is this bot instance
+</ParamField>
+
+### MessageMetadata
+
+Message metadata like timestamps and edit status.
+
+```typescript
+interface MessageMetadata {
+  dateSent: Date;
+  edited: boolean;
+  editedAt?: Date;
+}
+```
+
+### Attachment
+
+File or media attachment.
+
+```typescript
+interface Attachment {
+  type: "image" | "file" | "video" | "audio";
+  url?: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+  width?: number;
+  height?: number;
+  data?: Buffer | Blob;
+  fetchData?: () => Promise<Buffer>;
+}
+```
+
+<ParamField path="type" type="'image' | 'file' | 'video' | 'audio'" required>
+  Attachment type
+</ParamField>
+
+<ParamField path="fetchData" type="() => Promise<Buffer>">
+  Function to fetch attachment data with platform authentication
+</ParamField>
+
+Use `fetchData()` for private attachments that require authentication (e.g., Slack private URLs).
+
+### FileUpload
+
+File to upload with a message.
+
+```typescript
+interface FileUpload {
+  filename: string;
+  data: Buffer | Blob | ArrayBuffer;
+  mimeType?: string;
+}
+```
+
+## Event Types
+
+### ActionEvent
+
+Fired when a user clicks a button in a card.
+
+```typescript
+interface ActionEvent<TRawMessage = unknown> {
+  actionId: string;
+  threadId: string;
+  messageId: string;
+  user: Author;
+  value?: string;
+  triggerId?: string;
+  adapter: Adapter;
+  thread: Thread<TRawMessage>;
+  raw: unknown;
+  openModal(modal: ModalElement | CardJSXElement): Promise<{ viewId: string } | undefined>;
+}
+```
+
+### ReactionEvent
+
+Fired when a user adds or removes a reaction.
+
+```typescript
+interface ReactionEvent<TRawMessage = unknown> {
+  threadId: string;
+  messageId: string;
+  user: Author;
+  emoji: EmojiValue;
+  rawEmoji: string;
+  added: boolean;
+  message?: Message<TRawMessage>;
+  adapter: Adapter;
+  thread: Thread<TRawMessage>;
+  raw: unknown;
+}
+```
+
+<ParamField path="emoji" type="EmojiValue" required>
+  Normalized emoji as an EmojiValue singleton (enables `===` comparison)
+</ParamField>
+
+<ParamField path="rawEmoji" type="string" required>
+  Platform-specific emoji string (e.g., "+1" for Slack, "👍" for GChat)
+</ParamField>
+
+<ParamField path="added" type="boolean" required>
+  Whether the reaction was added (true) or removed (false)
+</ParamField>
+
+### SlashCommandEvent
+
+Fired when a user invokes a slash command.
+
+```typescript
+interface SlashCommandEvent<TState = Record<string, unknown>> {
+  command: string;
+  text: string;
+  user: Author;
+  channel: Channel<TState>;
+  triggerId?: string;
+  adapter: Adapter;
+  raw: unknown;
+  openModal(modal: ModalElement | CardJSXElement): Promise<{ viewId: string } | undefined>;
+}
+```
+
+<ParamField path="command" type="string" required>
+  The slash command (e.g., "/help")
+</ParamField>
+
+<ParamField path="text" type="string" required>
+  Arguments after the command
+</ParamField>
+
+### ModalSubmitEvent
+
+Fired when a user submits a modal form.
+
+```typescript
+interface ModalSubmitEvent<TRawMessage = unknown> {
+  callbackId: string;
+  values: Record<string, string>;
+  user: Author;
+  viewId: string;
+  privateMetadata?: string;
+  relatedThread?: Thread<Record<string, unknown>, TRawMessage>;
+  relatedMessage?: SentMessage<TRawMessage>;
+  relatedChannel?: Channel<Record<string, unknown>, TRawMessage>;
+  adapter: Adapter;
+  raw: unknown;
+}
+```
+
+<ParamField path="values" type="Record<string, string>" required>
+  Form field values keyed by input ID
+</ParamField>
+
+<ParamField path="relatedThread" type="Thread">
+  The thread where the modal was triggered (if from ActionEvent)
+</ParamField>
+
+<ParamField path="relatedMessage" type="SentMessage">
+  The message containing the button that opened the modal (if from ActionEvent)
+</ParamField>
+
+<ParamField path="relatedChannel" type="Channel">
+  The channel where the modal was triggered (if from SlashCommandEvent)
+</ParamField>
+
+### ModalCloseEvent
+
+Fired when a user closes/cancels a modal (requires `notifyOnClose: true`).
+
+```typescript
+interface ModalCloseEvent<TRawMessage = unknown> {
+  callbackId: string;
+  user: Author;
+  viewId: string;
+  privateMetadata?: string;
+  relatedThread?: Thread<Record<string, unknown>, TRawMessage>;
+  relatedMessage?: SentMessage<TRawMessage>;
+  relatedChannel?: Channel<Record<string, unknown>, TRawMessage>;
+  adapter: Adapter;
+  raw: unknown;
+}
+```
+
+## Modal Response Types
+
+Responses you can return from `onModalSubmit` handlers:
+
+### ModalErrorsResponse
+
+Show validation errors on the modal.
+
+```typescript
+interface ModalErrorsResponse {
+  action: "errors";
+  errors: Record<string, string>;
+}
+```
+
+### ModalUpdateResponse
+
+Update the modal with new content.
+
+```typescript
+interface ModalUpdateResponse {
+  action: "update";
+  modal: ModalElement;
+}
+```
+
+### ModalPushResponse
+
+Push a new modal onto the stack (Slack only).
+
+```typescript
+interface ModalPushResponse {
+  action: "push";
+  modal: ModalElement;
+}
+```
+
+### ModalCloseResponse
+
+Close the modal.
+
+```typescript
+interface ModalCloseResponse {
+  action: "close";
+}
+```
+
+## Fetch Types
+
+### FetchOptions
+
+Options for fetching messages.
+
+```typescript
+interface FetchOptions {
+  limit?: number;
+  cursor?: string;
+  direction?: "forward" | "backward";
+}
+```
+
+<ParamField path="limit" type="number">
+  Maximum messages to fetch (default varies by adapter, typically 50-100)
+</ParamField>
+
+<ParamField path="cursor" type="string">
+  Pagination cursor from previous FetchResult
+</ParamField>
+
+<ParamField path="direction" type="'forward' | 'backward'">
+  - `backward` (default): Fetch most recent messages. Cursor moves to older messages.
+  - `forward`: Fetch oldest messages. Cursor moves to newer messages.
+</ParamField>
+
+### FetchResult
+
+Result of fetching messages.
+
+```typescript
+interface FetchResult<TRawMessage = unknown> {
+  messages: Message<TRawMessage>[];
+  nextCursor?: string;
+}
+```
+
+Messages are always returned in chronological order (oldest first) within each page.
+
+### ThreadInfo
+
+Thread metadata.
+
+```typescript
+interface ThreadInfo {
+  id: string;
+  channelId: string;
+  channelName?: string;
+  isDM?: boolean;
+  metadata: Record<string, unknown>;
+}
+```
+
+### ChannelInfo
+
+Channel metadata.
+
+```typescript
+interface ChannelInfo {
+  id: string;
+  name?: string;
+  isDM?: boolean;
+  memberCount?: number;
+  metadata: Record<string, unknown>;
+}
+```
+
+## Emoji Types
+
+### EmojiValue
+
+Immutable emoji value object with object identity.
+
+```typescript
+interface EmojiValue {
+  readonly name: string;
+  toString(): string;
+  toJSON(): string;
+}
+```
+
+These are singleton objects - the same emoji name always returns the same frozen object instance, enabling `===` comparison:
+
+```typescript
+if (event.emoji === emoji.thumbs_up) {
+  // User gave a thumbs up!
+}
+```
+
+### WellKnownEmoji
+
+Type union of 80+ cross-platform emoji names:
+
+```typescript
+type WellKnownEmoji =
+  | "thumbs_up"
+  | "thumbs_down"
+  | "heart"
+  | "fire"
+  | "rocket"
+  // ... and many more
+```
+
+See the [emoji documentation](/api/emoji) for the complete list.
+
+### EmojiFormats
+
+Platform-specific emoji formats.
+
+```typescript
+interface EmojiFormats {
+  slack: string | string[];
+  gchat: string | string[];
+}
+```
+
+Example:
+```typescript
+{
+  slack: "+1",
+  gchat: "👍"
+}
+```
+
+## Configuration Types
+
+### ChatConfig
+
+Configuration for the Chat instance.
+
+```typescript
+interface ChatConfig<TAdapters extends Record<string, Adapter> = Record<string, Adapter>> {
+  userName: string;
+  adapters: TAdapters;
+  state: StateAdapter;
+  logger?: Logger | LogLevel;
+  dedupeTtlMs?: number;
+  streamingUpdateIntervalMs?: number;
+  fallbackStreamingPlaceholderText?: string | null;
+}
+```
+
+<ParamField path="userName" type="string" required>
+  Default bot username across all adapters
+</ParamField>
+
+<ParamField path="adapters" type="Record<string, Adapter>" required>
+  Map of adapter name to adapter instance
+</ParamField>
+
+<ParamField path="state" type="StateAdapter" required>
+  State adapter for subscriptions and locking
+</ParamField>
+
+<ParamField path="dedupeTtlMs" type="number" default="300000">
+  Message deduplication TTL in milliseconds (5 minutes)
+</ParamField>
+
+<ParamField path="streamingUpdateIntervalMs" type="number" default="500">
+  Update interval for fallback streaming (post+edit) in milliseconds
+</ParamField>
+
+<ParamField path="fallbackStreamingPlaceholderText" type="string | null" default='"..."'>
+  Placeholder text for fallback streaming. Set to null to wait for real text before posting.
+</ParamField>
+
+### WebhookOptions
+
+Options for webhook handling.
+
+```typescript
+interface WebhookOptions {
+  waitUntil?: (task: Promise<unknown>) => void;
+}
+```
+
+<ParamField path="waitUntil" type="(task: Promise<unknown>) => void">
+  Function to run message handling in the background (e.g., Next.js `after()` or Vercel Functions `waitUntil`)
+</ParamField>
+
+## Error Types
+
+### ChatError
+
+Base error class for Chat SDK errors.
+
+```typescript
+class ChatError extends Error {
+  constructor(message: string);
+}
+```
+
+### RateLimitError
+
+Thrown when rate limited by a platform.
+
+```typescript
+class RateLimitError extends ChatError {
+  constructor(message: string, public retryAfter?: number);
+}
+```
+
+<ParamField path="retryAfter" type="number">
+  Seconds until rate limit resets (if provided by platform)
+</ParamField>
+
+### LockError
+
+Thrown when failing to acquire a lock.
+
+```typescript
+class LockError extends ChatError {
+  constructor(message: string);
+}
+```
+
+### NotImplementedError
+
+Thrown when calling an unimplemented adapter feature.
+
+```typescript
+class NotImplementedError extends ChatError {
+  constructor(feature: string);
+}
+```
+
+## Constants
+
+### THREAD_STATE_TTL_MS
+
+Default TTL for thread state: 30 days in milliseconds.
+
+```typescript
+const THREAD_STATE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 2,592,000,000ms
+```
+
+## See Also
+
+- [Chat API](/api/chat)
+- [Thread API](/api/thread)
+- [Channel API](/api/channel)
+- [Message API](/api/message)

@@ -1,0 +1,260 @@
+---
+title: Getting Started
+description: Install Chat SDK and create your first bot in minutes
+---
+
+# Getting Started
+
+This guide will walk you through installing Chat SDK and creating your first bot.
+
+## Installation
+
+<Steps>
+  <Step title="Install the core SDK">
+    First, install the core `chat` package:
+
+    <CodeGroup>
+    ```bash npm
+    npm install chat
+    ```
+
+    ```bash yarn
+    yarn add chat
+    ```
+
+    ```bash pnpm
+    pnpm add chat
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Install platform adapters">
+    Install adapters for the platforms you want to support:
+
+    <CodeGroup>
+    ```bash npm
+    npm install @chat-adapter/slack @chat-adapter/teams @chat-adapter/gchat
+    ```
+
+    ```bash yarn
+    yarn add @chat-adapter/slack @chat-adapter/teams @chat-adapter/gchat
+    ```
+
+    ```bash pnpm
+    pnpm add @chat-adapter/slack @chat-adapter/teams @chat-adapter/gchat
+    ```
+    </CodeGroup>
+
+    <Note>
+    You only need to install adapters for platforms you plan to use. Each adapter is a separate package:
+    - `@chat-adapter/slack` - Slack
+    - `@chat-adapter/teams` - Microsoft Teams  
+    - `@chat-adapter/gchat` - Google Chat
+    - `@chat-adapter/discord` - Discord
+    - `@chat-adapter/telegram` - Telegram
+    - `@chat-adapter/github` - GitHub
+    - `@chat-adapter/linear` - Linear
+    </Note>
+  </Step>
+
+  <Step title="Install a state adapter">
+    Install a state adapter for persistence:
+
+    <CodeGroup>
+    ```bash npm (Production - Redis)
+    npm install @chat-adapter/state-redis
+    ```
+
+    ```bash npm (Development - Memory)
+    npm install @chat-adapter/state-memory
+    ```
+
+    ```bash yarn (Production - Redis)
+    yarn add @chat-adapter/state-redis
+    ```
+
+    ```bash pnpm (Production - Redis)
+    pnpm add @chat-adapter/state-redis
+    ```
+    </CodeGroup>
+
+    <Warning>
+    Use `@chat-adapter/state-memory` only for development and testing. It stores state in memory and will lose all data on restart. For production, use `@chat-adapter/state-redis` or `@chat-adapter/state-ioredis`.
+    </Warning>
+  </Step>
+</Steps>
+
+## Quick Start
+
+### Create Your Bot
+
+Create a new file `bot.ts` and initialize your bot:
+
+```typescript bot.ts
+import { Chat } from "chat";
+import { createSlackAdapter } from "@chat-adapter/slack";
+import { createRedisState } from "@chat-adapter/state-redis";
+
+export const bot = new Chat({
+  userName: "mybot",
+  adapters: {
+    slack: createSlackAdapter(),
+  },
+  state: createRedisState(),
+});
+
+// Respond to @mentions
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await thread.post("Hello! I'm listening to this thread.");
+});
+
+// Handle messages in subscribed threads
+bot.onSubscribedMessage(async (thread, message) => {
+  await thread.post(`You said: ${message.text}`);
+});
+```
+
+### Environment Variables
+
+Configure your platform credentials via environment variables:
+
+```bash .env
+# Slack
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_SIGNING_SECRET=your-signing-secret
+
+# Microsoft Teams (optional)
+TEAMS_APP_ID=your-app-id
+TEAMS_APP_PASSWORD=your-app-password
+TEAMS_APP_TENANT_ID=your-tenant-id
+
+# Google Chat (optional)
+GOOGLE_CHAT_CREDENTIALS={"type":"service_account",...}
+
+# Redis
+REDIS_URL=redis://localhost:6379
+```
+
+<Note>
+Adapter constructors automatically read credentials from environment variables. You can also pass them explicitly as options.
+</Note>
+
+### Set Up Webhook Handlers
+
+Create webhook endpoints for each platform. Here's an example using Next.js App Router:
+
+```typescript app/api/webhooks/slack/route.ts
+import { bot } from "@/lib/bot";
+import { after } from "next/server";
+
+export async function POST(request: Request) {
+  return bot.webhooks.slack(request, {
+    waitUntil: (p) => after(() => p),
+  });
+}
+```
+
+<CodeGroup>
+```typescript Next.js (App Router)
+import { bot } from "@/lib/bot";
+import { after } from "next/server";
+
+export async function POST(request: Request) {
+  return bot.webhooks.slack(request, {
+    waitUntil: (p) => after(() => p),
+  });
+}
+```
+
+```typescript Vercel Functions
+import { bot } from "./bot";
+import { waitUntil } from "@vercel/functions";
+
+export default async function handler(request: Request) {
+  return bot.webhooks.slack(request, { waitUntil });
+}
+```
+
+```typescript Express
+import { bot } from "./bot";
+import express from "express";
+
+const app = express();
+
+app.post("/api/webhooks/slack", async (req, res) => {
+  const request = new Request(`http://localhost${req.url}`, {
+    method: "POST",
+    headers: req.headers as HeadersInit,
+    body: JSON.stringify(req.body),
+  });
+  
+  const response = await bot.webhooks.slack(request);
+  res.status(response.status).send(await response.text());
+});
+```
+</CodeGroup>
+
+<Note>
+The `waitUntil` option ensures webhook responses are fast (< 3 seconds) while message processing continues in the background. This is critical for platforms like Slack that retry if responses are slow.
+</Note>
+
+## Platform Configuration
+
+Each platform requires specific configuration:
+
+<Steps>
+  <Step title="Slack">
+    1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
+    2. Enable **Socket Mode** or configure **Event Subscriptions**
+    3. Add bot scopes: `app_mentions:read`, `chat:write`, `channels:history`
+    4. Set your webhook URL to `https://your-domain.com/api/webhooks/slack`
+    5. Install the app to your workspace
+  </Step>
+
+  <Step title="Microsoft Teams">
+    1. Register your app in Azure AD
+    2. Create a Teams app manifest with your bot ID
+    3. Configure messaging endpoint: `https://your-domain.com/api/webhooks/teams`
+    4. Upload the app to Teams
+  </Step>
+
+  <Step title="Google Chat">
+    1. Create a Google Cloud project
+    2. Enable Google Chat API
+    3. Create a service account and download credentials JSON
+    4. Configure webhook URL: `https://your-domain.com/api/webhooks/gchat`
+    5. Publish the app
+  </Step>
+</Steps>
+
+## Verify Installation
+
+Test your bot by:
+
+1. Starting your local server
+2. Using a tool like [ngrok](https://ngrok.com/) to expose your localhost
+3. Configuring your platform webhook URL to the ngrok URL
+4. @mentioning your bot in a channel
+
+You should see your bot respond with "Hello! I'm listening to this thread."
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Basic Usage" icon="book" href="/usage">
+    Learn core concepts and event handlers
+  </Card>
+  
+  <Card title="Event Handlers" icon="bell">
+    Handle mentions, messages, reactions, and more
+  </Card>
+  
+  <Card title="AI Streaming" icon="sparkles">
+    Stream LLM responses to your chat
+  </Card>
+  
+  <Card title="Interactive Cards" icon="window">
+    Build rich UI with buttons and modals
+  </Card>
+</CardGroup>

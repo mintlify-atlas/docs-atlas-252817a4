@@ -1,0 +1,555 @@
+---
+title: Modal Components
+description: API reference for building interactive form dialogs
+---
+
+Modal components provide cross-platform dialog forms for collecting user input. They automatically convert to platform-specific formats.
+
+## Opening Modals
+
+Modals are opened in response to user actions:
+
+```typescript
+// From a button click (ActionEvent)
+chat.onAction("feedback", async (event) => {
+  await event.openModal(
+    Modal({
+      callbackId: "feedback_form",
+      title: "Submit Feedback",
+      children: [
+        TextInput({ id: "message", label: "Your feedback" })
+      ]
+    })
+  );
+});
+
+// From a slash command
+chat.onSlashCommand("/feedback", async (event) => {
+  await event.openModal(
+    Modal({
+      callbackId: "feedback_form",
+      title: "Submit Feedback",
+      children: [
+        TextInput({ id: "message", label: "Your feedback" })
+      ]
+    })
+  );
+});
+```
+
+## Handling Submissions
+
+```typescript
+chat.onModalSubmit("feedback_form", async (event) => {
+  const message = event.values.message;
+  
+  // Process the submission
+  await saveFeedback(message);
+  
+  // Optionally return a response to update or close the modal
+  return { action: "close" };
+});
+```
+
+## Modal
+
+Root modal container.
+
+<ParamField path="callbackId" type="string" required>
+  Unique identifier for routing submission events
+</ParamField>
+
+<ParamField path="title" type="string" required>
+  Modal title displayed in header
+</ParamField>
+
+<ParamField path="children" type="ModalChild[]">
+  Form input elements
+</ParamField>
+
+<ParamField path="submitLabel" type="string">
+  Custom label for submit button (default: "Submit")
+</ParamField>
+
+<ParamField path="closeLabel" type="string">
+  Custom label for close/cancel button (default: "Cancel")
+</ParamField>
+
+<ParamField path="notifyOnClose" type="boolean">
+  If true, triggers onModalClose handler when user closes without submitting
+</ParamField>
+
+<ParamField path="privateMetadata" type="string">
+  Arbitrary string passed through modal lifecycle (e.g., JSON context)
+</ParamField>
+
+```typescript
+interface ModalOptions {
+  callbackId: string;
+  title: string;
+  children?: ModalChild[];
+  submitLabel?: string;
+  closeLabel?: string;
+  notifyOnClose?: boolean;
+  privateMetadata?: string;
+}
+
+function Modal(options: ModalOptions): ModalElement;
+```
+
+### ModalElement Type
+
+```typescript
+interface ModalElement {
+  type: "modal";
+  callbackId: string;
+  title: string;
+  submitLabel?: string;
+  closeLabel?: string;
+  notifyOnClose?: boolean;
+  privateMetadata?: string;
+  children: ModalChild[];
+}
+
+type ModalChild =
+  | TextInputElement
+  | SelectElement
+  | RadioSelectElement
+  | TextElement
+  | FieldsElement;
+```
+
+## TextInput
+
+Single or multi-line text input field.
+
+<ParamField path="id" type="string" required>
+  Unique input ID (used to access value in submission)
+</ParamField>
+
+<ParamField path="label" type="string" required>
+  Input label displayed above field
+</ParamField>
+
+<ParamField path="placeholder" type="string">
+  Placeholder text shown when empty
+</ParamField>
+
+<ParamField path="initialValue" type="string">
+  Pre-filled value
+</ParamField>
+
+<ParamField path="multiline" type="boolean">
+  If true, renders as textarea
+</ParamField>
+
+<ParamField path="maxLength" type="number">
+  Maximum character limit
+</ParamField>
+
+<ParamField path="optional" type="boolean">
+  If true, field is not required for submission
+</ParamField>
+
+```typescript
+interface TextInputOptions {
+  id: string;
+  label: string;
+  placeholder?: string;
+  initialValue?: string;
+  multiline?: boolean;
+  maxLength?: number;
+  optional?: boolean;
+}
+
+function TextInput(options: TextInputOptions): TextInputElement;
+```
+
+**Example:**
+
+```typescript
+TextInput({
+  id: "email",
+  label: "Email Address",
+  placeholder: "you@example.com"
+})
+
+TextInput({
+  id: "feedback",
+  label: "Your Feedback",
+  multiline: true,
+  maxLength: 500,
+  optional: true
+})
+```
+
+## Select
+
+Dropdown select menu.
+
+<ParamField path="id" type="string" required>
+  Unique input ID
+</ParamField>
+
+<ParamField path="label" type="string" required>
+  Select label
+</ParamField>
+
+<ParamField path="options" type="SelectOptionElement[]" required>
+  Available options
+</ParamField>
+
+<ParamField path="placeholder" type="string">
+  Placeholder text shown when no option selected
+</ParamField>
+
+<ParamField path="initialOption" type="string">
+  Pre-selected option value
+</ParamField>
+
+<ParamField path="optional" type="boolean">
+  If true, field is not required for submission
+</ParamField>
+
+```typescript
+interface SelectOptions {
+  id: string;
+  label: string;
+  options: SelectOptionElement[];
+  placeholder?: string;
+  initialOption?: string;
+  optional?: boolean;
+}
+
+function Select(options: SelectOptions): SelectElement;
+```
+
+**Example:**
+
+```typescript
+Select({
+  id: "priority",
+  label: "Priority Level",
+  placeholder: "Choose priority",
+  options: [
+    SelectOption({ label: "High", value: "high" }),
+    SelectOption({ label: "Medium", value: "medium" }),
+    SelectOption({ label: "Low", value: "low" })
+  ]
+})
+```
+
+## RadioSelect
+
+Radio button group.
+
+<ParamField path="id" type="string" required>
+  Unique input ID
+</ParamField>
+
+<ParamField path="label" type="string" required>
+  Radio group label
+</ParamField>
+
+<ParamField path="options" type="SelectOptionElement[]" required>
+  Available options
+</ParamField>
+
+<ParamField path="initialOption" type="string">
+  Pre-selected option value
+</ParamField>
+
+<ParamField path="optional" type="boolean">
+  If true, field is not required for submission
+</ParamField>
+
+```typescript
+interface RadioSelectOptions {
+  id: string;
+  label: string;
+  options: SelectOptionElement[];
+  initialOption?: string;
+  optional?: boolean;
+}
+
+function RadioSelect(options: RadioSelectOptions): RadioSelectElement;
+```
+
+**Example:**
+
+```typescript
+RadioSelect({
+  id: "status",
+  label: "Status",
+  options: [
+    SelectOption({ label: "Active", value: "active", description: "Currently running" }),
+    SelectOption({ label: "Paused", value: "paused", description: "Temporarily stopped" }),
+    SelectOption({ label: "Stopped", value: "stopped", description: "Permanently stopped" })
+  ],
+  initialOption: "active"
+})
+```
+
+## SelectOption
+
+Option for Select or RadioSelect.
+
+<ParamField path="label" type="string" required>
+  Display text
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  Value returned on submission
+</ParamField>
+
+<ParamField path="description" type="string">
+  Optional description text
+</ParamField>
+
+```typescript
+function SelectOption(options: {
+  label: string;
+  value: string;
+  description?: string;
+}): SelectOptionElement;
+```
+
+## Modal Event Handlers
+
+### ModalSubmitEvent
+
+Event fired when user submits the modal.
+
+```typescript
+interface ModalSubmitEvent<TRawMessage = unknown> {
+  /** The adapter that received this event */
+  adapter: Adapter;
+  /** The callback ID specified when creating the modal */
+  callbackId: string;
+  /** The user who submitted the modal */
+  user: Author;
+  /** Form field values keyed by input ID */
+  values: Record<string, string>;
+  /** Platform-specific view/dialog ID */
+  viewId: string;
+  /** Raw platform-specific payload */
+  raw: unknown;
+  /**
+   * The private metadata string set when the modal was created.
+   * Use this to pass arbitrary context (e.g., JSON) through the modal lifecycle.
+   */
+  privateMetadata?: string;
+  /**
+   * The thread where the modal was originally triggered from.
+   * Available when the modal was opened via ActionEvent.openModal().
+   */
+  relatedThread?: Thread<Record<string, unknown>, TRawMessage>;
+  /**
+   * The message that contained the action which opened the modal.
+   * Available when the modal was opened from a message action via ActionEvent.openModal().
+   * This is a SentMessage with edit/delete capabilities.
+   */
+  relatedMessage?: SentMessage<TRawMessage>;
+  /**
+   * The channel where the modal was originally triggered from.
+   * Available when the modal was opened via SlashCommandEvent.openModal().
+   */
+  relatedChannel?: Channel<Record<string, unknown>, TRawMessage>;
+}
+```
+
+**Handler:**
+
+```typescript
+chat.onModalSubmit("form_id", async (event) => {
+  const name = event.values.name;
+  const email = event.values.email;
+  
+  // Process the form
+  await processForm({ name, email });
+  
+  // Optionally respond to update the modal
+  return { action: "close" };
+});
+```
+
+### ModalCloseEvent
+
+Event fired when user closes modal without submitting (requires `notifyOnClose: true`).
+
+```typescript
+interface ModalCloseEvent<TRawMessage = unknown> {
+  adapter: Adapter;
+  callbackId: string;
+  user: Author;
+  viewId: string;
+  raw: unknown;
+  privateMetadata?: string;
+  relatedThread?: Thread<Record<string, unknown>, TRawMessage>;
+  relatedMessage?: SentMessage<TRawMessage>;
+  relatedChannel?: Channel<Record<string, unknown>, TRawMessage>;
+}
+```
+
+**Handler:**
+
+```typescript
+chat.onModalClose("form_id", async (event) => {
+  console.log(`${event.user.userName} closed the modal without submitting`);
+});
+```
+
+## Modal Response Types
+
+Return these from `onModalSubmit` handlers to control modal behavior:
+
+### Close Modal
+
+```typescript
+return { action: "close" };
+```
+
+### Show Validation Errors
+
+```typescript
+return {
+  action: "errors",
+  errors: {
+    email: "Invalid email format",
+    phone: "Phone number is required"
+  }
+};
+```
+
+### Update Modal Contents
+
+```typescript
+return {
+  action: "update",
+  modal: Modal({
+    callbackId: "form_updated",
+    title: "Updated Form",
+    children: [/* new fields */]
+  })
+};
+```
+
+### Push New Modal (Stack)
+
+```typescript
+return {
+  action: "push",
+  modal: Modal({
+    callbackId: "confirmation",
+    title: "Confirm",
+    children: [/* confirmation fields */]
+  })
+};
+```
+
+## Complete Example
+
+```typescript
+import { Modal, TextInput, Select, SelectOption, RadioSelect } from "chat";
+
+// Open modal from button click
+chat.onAction("create_ticket", async (event) => {
+  await event.openModal(
+    Modal({
+      callbackId: "ticket_form",
+      title: "Create Support Ticket",
+      submitLabel: "Create",
+      notifyOnClose: true,
+      children: [
+        TextInput({
+          id: "subject",
+          label: "Subject",
+          placeholder: "Brief description"
+        }),
+        TextInput({
+          id: "description",
+          label: "Description",
+          multiline: true,
+          maxLength: 1000
+        }),
+        Select({
+          id: "priority",
+          label: "Priority",
+          options: [
+            SelectOption({ label: "High", value: "high" }),
+            SelectOption({ label: "Medium", value: "medium" }),
+            SelectOption({ label: "Low", value: "low" })
+          ],
+          initialOption: "medium"
+        }),
+        RadioSelect({
+          id: "category",
+          label: "Category",
+          options: [
+            SelectOption({ label: "Bug", value: "bug" }),
+            SelectOption({ label: "Feature", value: "feature" }),
+            SelectOption({ label: "Question", value: "question" })
+          ]
+        })
+      ]
+    })
+  );
+});
+
+// Handle submission
+chat.onModalSubmit("ticket_form", async (event) => {
+  const { subject, description, priority, category } = event.values;
+  
+  // Validate
+  if (!subject || subject.length < 5) {
+    return {
+      action: "errors",
+      errors: { subject: "Subject must be at least 5 characters" }
+    };
+  }
+  
+  // Create ticket
+  const ticket = await createTicket({
+    subject,
+    description,
+    priority,
+    category,
+    author: event.user
+  });
+  
+  // Post confirmation to the thread
+  if (event.relatedThread) {
+    await event.relatedThread.post(
+      `Ticket #${ticket.id} created: ${subject}`
+    );
+  }
+  
+  // Close the modal
+  return { action: "close" };
+});
+
+// Handle close without submit
+chat.onModalClose("ticket_form", async (event) => {
+  console.log(`${event.user.userName} cancelled ticket creation`);
+});
+```
+
+## JSX Support
+
+Modals also support JSX syntax:
+
+```tsx
+/** @jsxImportSource chat */
+import { Modal, TextInput, Select, SelectOption } from "chat";
+
+await event.openModal(
+  <Modal callbackId="feedback" title="Feedback" submitLabel="Send">
+    <TextInput id="message" label="Your feedback" multiline />
+    <Select id="rating" label="Rating">
+      <SelectOption label="Excellent" value="5" />
+      <SelectOption label="Good" value="4" />
+      <SelectOption label="Fair" value="3" />
+    </Select>
+  </Modal>
+);
+```

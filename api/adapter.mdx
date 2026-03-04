@@ -1,0 +1,428 @@
+---
+title: Adapter
+description: Interface for implementing custom platform adapters for Chat SDK
+---
+
+The `Adapter` interface defines the contract for integrating new chat platforms with Chat SDK. Each platform adapter handles webhook parsing, message formatting, and platform-specific API calls.
+
+## Built-in Adapters
+
+Chat SDK provides adapters for:
+
+- [@chat-adapter/slack](/adapters/slack) - Slack
+- [@chat-adapter/teams](/adapters/teams) - Microsoft Teams
+- [@chat-adapter/gchat](/adapters/gchat) - Google Chat
+- [@chat-adapter/discord](/adapters/discord) - Discord
+- [@chat-adapter/telegram](/adapters/telegram) - Telegram
+- [@chat-adapter/github](/adapters/github) - GitHub
+- [@chat-adapter/linear](/adapters/linear) - Linear
+
+## Interface Overview
+
+```typescript
+interface Adapter<TThreadId = unknown, TRawMessage = unknown> {
+  // Properties
+  readonly name: string;
+  readonly userName: string;
+  readonly botUserId?: string;
+  
+  // Core Methods
+  handleWebhook(request: Request, options?: WebhookOptions): Promise<Response>;
+  initialize(chat: ChatInstance): Promise<void>;
+  
+  // Thread ID Management
+  encodeThreadId(platformData: TThreadId): string;
+  decodeThreadId(threadId: string): TThreadId;
+  channelIdFromThreadId?(threadId: string): string;
+  
+  // Messaging
+  postMessage(threadId: string, message: AdapterPostableMessage): Promise<RawMessage<TRawMessage>>;
+  editMessage(threadId: string, messageId: string, message: AdapterPostableMessage): Promise<RawMessage<TRawMessage>>;
+  deleteMessage(threadId: string, messageId: string): Promise<void>;
+  postEphemeral?(threadId: string, userId: string, message: AdapterPostableMessage): Promise<EphemeralMessage>;
+  postChannelMessage?(channelId: string, message: AdapterPostableMessage): Promise<RawMessage<TRawMessage>>;
+  
+  // Reactions
+  addReaction(threadId: string, messageId: string, emoji: EmojiValue | string): Promise<void>;
+  removeReaction(threadId: string, messageId: string, emoji: EmojiValue | string): Promise<void>;
+  
+  // Fetching
+  fetchMessages(threadId: string, options?: FetchOptions): Promise<FetchResult<TRawMessage>>;
+  fetchMessage?(threadId: string, messageId: string): Promise<Message<TRawMessage> | null>;
+  fetchThread(threadId: string): Promise<ThreadInfo>;
+  fetchChannelInfo?(channelId: string): Promise<ChannelInfo>;
+  fetchChannelMessages?(channelId: string, options?: FetchOptions): Promise<FetchResult<TRawMessage>>;
+  listThreads?(channelId: string, options?: ListThreadsOptions): Promise<ListThreadsResult<TRawMessage>>;
+  
+  // Formatting
+  parseMessage(raw: TRawMessage): Message<TRawMessage>;
+  renderFormatted(content: FormattedContent): string;
+  
+  // Features
+  startTyping(threadId: string, status?: string): Promise<void>;
+  openDM?(userId: string): Promise<string>;
+  openModal?(triggerId: string, modal: ModalElement, contextId?: string): Promise<{ viewId: string }>;
+  stream?(threadId: string, textStream: AsyncIterable<string>, options?: StreamOptions): Promise<RawMessage<TRawMessage>>;
+  isDM?(threadId: string): boolean;
+  onThreadSubscribe?(threadId: string): Promise<void>;
+}
+```
+
+## Core Methods
+
+### name
+
+<ParamField path="name" type="string" required>
+  Unique adapter name (e.g., "slack", "teams", "discord")
+</ParamField>
+
+Used as the prefix in thread IDs and for adapter identification.
+
+### userName
+
+<ParamField path="userName" type="string" required>
+  Bot username for this adapter
+</ParamField>
+
+Can override the global `userName` from ChatConfig.
+
+### handleWebhook()
+
+Process incoming webhooks from the platform.
+
+<ParamField path="request" type="Request" required>
+  Standard Web Request object
+</ParamField>
+
+<ParamField path="options" type="WebhookOptions">
+  Optional webhook handling options (waitUntil for background processing)
+</ParamField>
+
+<ResponseField name="response" type="Response">
+  HTTP response to return to the platform
+</ResponseField>
+
+```typescript
+// In your webhook endpoint
+export async function POST(request: Request) {
+  return await chat.webhooks.slack(request);
+}
+```
+
+### initialize()
+
+Called when the Chat instance is created. Use this to set up connections, validate credentials, etc.
+
+<ParamField path="chat" type="ChatInstance" required>
+  The Chat instance
+</ParamField>
+
+```typescript
+async initialize(chat: ChatInstance): Promise<void> {
+  this.logger = chat.getLogger(this.name);
+  await this.validateCredentials();
+}
+```
+
+## Thread ID Management
+
+### encodeThreadId()
+
+Convert platform-specific thread data to a string ID.
+
+<ParamField path="platformData" type="TThreadId" required>
+  Platform-specific thread data structure
+</ParamField>
+
+<ResponseField name="threadId" type="string">
+  Encoded thread ID string
+</ResponseField>
+
+```typescript
+// Slack example
+encodeThreadId(data: { channel: string; ts: string }): string {
+  return `slack:${data.channel}:${data.ts}`;
+}
+```
+
+Thread IDs should follow the pattern: `{adapter}:{channel}:{thread}`
+
+### decodeThreadId()
+
+Parse a thread ID string back to platform-specific data.
+
+<ParamField path="threadId" type="string" required>
+  Thread ID string
+</ParamField>
+
+<ResponseField name="platformData" type="TThreadId">
+  Platform-specific thread data structure
+</ResponseField>
+
+```typescript
+// Slack example
+decodeThreadId(threadId: string): { channel: string; ts: string } {
+  const [, channel, ts] = threadId.split(":");
+  return { channel, ts };
+}
+```
+
+### channelIdFromThreadId()
+
+Extract channel ID from a thread ID. Optional - defaults to first two parts.
+
+<ParamField path="threadId" type="string" required>
+  Thread ID string
+</ParamField>
+
+<ResponseField name="channelId" type="string">
+  Channel ID
+</ResponseField>
+
+```typescript
+channelIdFromThreadId(threadId: string): string {
+  const parts = threadId.split(":");
+  return `${parts[0]}:${parts[1]}`; // e.g., "slack:C123"
+}
+```
+
+## Messaging Methods
+
+### postMessage()
+
+Post a message to a thread.
+
+<ParamField path="threadId" type="string" required>
+  Thread ID to post to
+</ParamField>
+
+<ParamField path="message" type="AdapterPostableMessage" required>
+  Message content (string, markdown, AST, or card)
+</ParamField>
+
+<ResponseField name="rawMessage" type="RawMessage<TRawMessage>">
+  Platform response with message ID
+</ResponseField>
+
+### editMessage()
+
+Edit an existing message.
+
+<ParamField path="threadId" type="string" required>
+  Thread containing the message
+</ParamField>
+
+<ParamField path="messageId" type="string" required>
+  Platform-specific message ID
+</ParamField>
+
+<ParamField path="message" type="AdapterPostableMessage" required>
+  New message content
+</ParamField>
+
+<ResponseField name="rawMessage" type="RawMessage<TRawMessage>">
+  Updated message
+</ResponseField>
+
+### deleteMessage()
+
+Delete a message.
+
+<ParamField path="threadId" type="string" required>
+  Thread containing the message
+</ParamField>
+
+<ParamField path="messageId" type="string" required>
+  Platform-specific message ID
+</ParamField>
+
+### renderFormatted()
+
+Convert mdast AST to platform-specific format.
+
+<ParamField path="content" type="FormattedContent" required>
+  mdast Root node
+</ParamField>
+
+<ResponseField name="rendered" type="string">
+  Platform-specific formatted text
+</ResponseField>
+
+```typescript
+renderFormatted(ast: Root): string {
+  return this.formatConverter.fromAst(ast);
+}
+```
+
+### parseMessage()
+
+Parse platform message to normalized Message object.
+
+<ParamField path="raw" type="TRawMessage" required>
+  Platform-specific message object
+</ParamField>
+
+<ResponseField name="message" type="Message<TRawMessage>">
+  Normalized message
+</ResponseField>
+
+```typescript
+parseMessage(raw: SlackMessage): Message<SlackMessage> {
+  return new Message({
+    id: raw.ts,
+    threadId: this.encodeThreadId({ channel: raw.channel, ts: raw.thread_ts || raw.ts }),
+    text: raw.text,
+    formatted: this.formatConverter.toAst(raw.text),
+    author: this.parseUser(raw.user),
+    metadata: { dateSent: new Date(Number(raw.ts) * 1000), edited: false },
+    raw,
+  });
+}
+```
+
+## Optional Features
+
+### stream()
+
+Stream AI responses using platform-native streaming (Slack only).
+
+<ParamField path="threadId" type="string" required>
+  Thread to stream to
+</ParamField>
+
+<ParamField path="textStream" type="AsyncIterable<string>" required>
+  Text chunks to stream
+</ParamField>
+
+<ParamField path="options" type="StreamOptions">
+  Platform-specific options
+</ParamField>
+
+<ResponseField name="rawMessage" type="RawMessage<TRawMessage>">
+  Final message after streaming completes
+</ResponseField>
+
+### openDM()
+
+Open a direct message conversation with a user.
+
+<ParamField path="userId" type="string" required>
+  Platform-specific user ID
+</ParamField>
+
+<ResponseField name="threadId" type="string">
+  Thread ID for the DM
+</ResponseField>
+
+### openModal()
+
+Open a modal/dialog form.
+
+<ParamField path="triggerId" type="string" required>
+  Platform trigger ID from action event
+</ParamField>
+
+<ParamField path="modal" type="ModalElement" required>
+  Modal element to display
+</ParamField>
+
+<ParamField path="contextId" type="string">
+  Optional context ID for storing thread/message reference
+</ParamField>
+
+<ResponseField name="result" type="{ viewId: string }">
+  Platform-specific view/dialog ID
+</ResponseField>
+
+## Example: Custom Adapter
+
+```typescript
+import { Adapter, Message, RawMessage, FormattedContent } from "chat";
+
+interface MyPlatformMessage {
+  id: string;
+  channel_id: string;
+  thread_id?: string;
+  content: string;
+  author_id: string;
+}
+
+interface MyThreadId {
+  channelId: string;
+  threadId: string;
+}
+
+export class MyPlatformAdapter implements Adapter<MyThreadId, MyPlatformMessage> {
+  readonly name = "myplatform";
+  readonly userName: string;
+
+  constructor(userName: string) {
+    this.userName = userName;
+  }
+
+  async initialize(chat: ChatInstance): Promise<void> {
+    // Setup code
+  }
+
+  async handleWebhook(request: Request): Promise<Response> {
+    const payload = await request.json();
+    // Parse webhook and call chat.processMessage()
+    return new Response("OK");
+  }
+
+  encodeThreadId(data: MyThreadId): string {
+    return `myplatform:${data.channelId}:${data.threadId}`;
+  }
+
+  decodeThreadId(threadId: string): MyThreadId {
+    const [, channelId, threadId] = threadId.split(":");
+    return { channelId, threadId };
+  }
+
+  async postMessage(
+    threadId: string,
+    message: AdapterPostableMessage
+  ): Promise<RawMessage<MyPlatformMessage>> {
+    const { channelId, threadId: tid } = this.decodeThreadId(threadId);
+    // Call platform API to post message
+    return { id: "msg-123", threadId, raw: {} as MyPlatformMessage };
+  }
+
+  parseMessage(raw: MyPlatformMessage): Message<MyPlatformMessage> {
+    return new Message({
+      id: raw.id,
+      threadId: this.encodeThreadId({
+        channelId: raw.channel_id,
+        threadId: raw.thread_id || raw.id,
+      }),
+      text: raw.content,
+      formatted: { type: "root", children: [{ type: "text", value: raw.content }] },
+      author: {
+        userId: raw.author_id,
+        userName: raw.author_id,
+        fullName: raw.author_id,
+        isBot: false,
+        isMe: false,
+      },
+      metadata: {
+        dateSent: new Date(),
+        edited: false,
+      },
+      raw,
+    });
+  }
+
+  renderFormatted(content: FormattedContent): string {
+    // Convert mdast to platform format
+    return "";
+  }
+
+  // Implement other required methods...
+}
+```
+
+## See Also
+
+- [Adapter Overview](/adapters/index)
+- [StateAdapter Interface](/api/state-adapter)
+- [Built-in Adapters](/adapters/slack)

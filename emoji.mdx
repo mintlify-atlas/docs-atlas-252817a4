@@ -1,0 +1,362 @@
+---
+title: Cross-Platform Emoji Support
+description: Use emoji in messages with automatic conversion between Slack, Teams, Google Chat, and other platforms
+---
+
+# Cross-Platform Emoji Support
+
+The Chat SDK provides a unified emoji system that works seamlessly across platforms. Emoji are automatically converted between platform-specific formats:
+
+- **Slack**: `:emoji_name:` format (e.g., `:thumbs_up:`)
+- **Google Chat**: Unicode emoji (e.g., 👍)
+- **Discord**: Unicode emoji
+- **Microsoft Teams**: Unicode emoji
+
+## Using Emoji in Messages
+
+Simple template string interpolation:
+
+```typescript
+import { emoji } from "chat";
+
+await thread.post(`Great job! ${emoji.thumbs_up} ${emoji.fire}`);
+// Slack: "Great job! :+1: :fire:"
+// GChat: "Great job! 👍 🔥"
+```
+
+## Emoji Object
+
+The `emoji` object provides type-safe access to 100+ well-known emoji:
+
+```typescript
+import { emoji } from "chat";
+
+// Reactions & Gestures
+emoji.thumbs_up
+emoji.thumbs_down
+emoji.clap
+emoji.wave
+emoji.pray
+
+// Emotions & Faces
+emoji.heart
+emoji.smile
+emoji.laugh
+emoji.thinking
+emoji.cry
+
+// Status & Symbols
+emoji.check
+emoji.x
+emoji.warning
+emoji.fire
+emoji.star
+
+// Objects & Tools
+emoji.rocket
+emoji.party
+emoji.lightbulb
+emoji.bug
+emoji.lock
+```
+
+## EmojiValue Type
+
+Each emoji is an immutable `EmojiValue` object:
+
+```typescript
+interface EmojiValue {
+  readonly name: string;     // Normalized name (e.g., "thumbs_up")
+  toString(): string;        // Returns "{{emoji:thumbs_up}}"
+  toJSON(): string;          // Returns "{{emoji:thumbs_up}}"
+}
+```
+
+Key features:
+
+- **Object identity**: Same emoji name always returns the same object instance
+- **String conversion**: Works in template literals via `toString()`
+- **Singleton pattern**: Enables `===` comparison
+
+```typescript
+const e1 = emoji.thumbs_up;
+const e2 = emoji.thumbs_up;
+console.log(e1 === e2); // true - same object!
+```
+
+## Custom Emoji
+
+Define your own emoji mappings:
+
+```typescript
+import { createEmoji, type EmojiFormats } from "chat";
+
+// First, extend the type (in a .d.ts file)
+declare module "chat" {
+  interface CustomEmojiMap {
+    unicorn: EmojiFormats;
+    company_logo: EmojiFormats;
+  }
+}
+
+// Then create your emoji helper
+const myEmoji = createEmoji({
+  unicorn: { slack: "unicorn_face", gchat: "🦄" },
+  company_logo: { slack: "company", gchat: "🏢" },
+});
+
+await thread.post(`${myEmoji.unicorn} Magic!`);
+// Slack: ":unicorn_face: Magic!"
+// GChat: "🦄 Magic!"
+```
+
+## Emoji in Reactions
+
+Use emoji for message reactions:
+
+```typescript
+const message = await thread.post("Deploy completed!");
+
+// Add reaction
+await message.addReaction(emoji.thumbs_up);
+
+// Remove reaction
+await message.removeReaction(emoji.thumbs_up);
+```
+
+## Reaction Event Handling
+
+Listen for specific emoji reactions:
+
+```typescript
+import { emoji } from "chat";
+
+chat.onReaction([emoji.thumbs_up, emoji.heart], async (event) => {
+  if (event.added) {
+    console.log(`${event.user.userName} reacted with ${event.emoji.name}`);
+  }
+  
+  // Object identity comparison works!
+  if (event.emoji === emoji.thumbs_up) {
+    await event.thread.post("Thanks for the approval!");
+  }
+});
+```
+
+## EmojiResolver
+
+Low-level API for platform conversion:
+
+```typescript
+import { defaultEmojiResolver } from "chat";
+
+// Convert from Slack format
+const e1 = defaultEmojiResolver.fromSlack("+1");
+console.log(e1.name); // "thumbs_up"
+
+// Convert from GChat format
+const e2 = defaultEmojiResolver.fromGChat("👍");
+console.log(e2.name); // "thumbs_up"
+
+// Convert to platform format
+const slackFormat = defaultEmojiResolver.toSlack(emoji.thumbs_up);
+console.log(slackFormat); // "+1"
+
+const gchatFormat = defaultEmojiResolver.toGChat(emoji.thumbs_up);
+console.log(gchatFormat); // "👍"
+```
+
+## Well-Known Emoji
+
+Complete list organized by category:
+
+### Reactions & Gestures
+
+```typescript
+emoji.thumbs_up      // 👍
+emoji.thumbs_down    // 👎
+emoji.clap           // 👏
+emoji.wave           // 👋
+emoji.pray           // 🙏
+emoji.muscle         // 💪
+emoji.ok_hand        // 👌
+emoji.raised_hands   // 🙌
+emoji.shrug          // 🤷
+emoji.facepalm       // 🤦
+```
+
+### Emotions & Faces
+
+```typescript
+emoji.heart          // ❤️
+emoji.smile          // 😊
+emoji.laugh          // 😂
+emoji.thinking       // 🤔
+emoji.sad            // 😢
+emoji.cry            // 😭
+emoji.angry          // 😠
+emoji.love_eyes      // 😍
+emoji.cool           // 😎
+emoji.wink           // 😉
+emoji.mind_blown     // 🤯
+```
+
+### Status & Symbols
+
+```typescript
+emoji.check          // ✅
+emoji.x              // ❌
+emoji.warning        // ⚠️
+emoji.info           // ℹ️
+emoji.question       // ❓
+emoji.exclamation    // ❗
+emoji.fire           // 🔥
+emoji.star           // ⭐
+emoji.sparkles       // ✨
+emoji.lightning      // ⚡
+emoji.eyes           // 👀
+```
+
+### Status Indicators (Colored Circles)
+
+```typescript
+emoji.green_circle   // 🟢
+emoji.yellow_circle  // 🟡
+emoji.red_circle     // 🔴
+emoji.blue_circle    // 🔵
+```
+
+### Objects & Tools
+
+```typescript
+emoji.rocket         // 🚀
+emoji.party          // 🎉
+emoji.trophy         // 🏆
+emoji.lightbulb      // 💡
+emoji.bug            // 🐛
+emoji.lock           // 🔒
+emoji.key            // 🔑
+emoji.memo           // 📝
+emoji.calendar       // 📅
+emoji.bell           // 🔔
+emoji.package        // 📦
+```
+
+### Arrows & Directions
+
+```typescript
+emoji.arrow_up       // ⬆️
+emoji.arrow_down     // ⬇️
+emoji.arrow_left     // ⬅️
+emoji.arrow_right    // ➡️
+emoji.refresh        // 🔄
+```
+
+## Emoji in Cards
+
+Emoji work in card text elements:
+
+```tsx
+import { Card, Text, emoji } from "chat";
+
+await thread.post(
+  <Card title={`Status Update ${emoji.rocket}`}>
+    <Text>{emoji.check} Deployment successful</Text>
+    <Text>{emoji.green_circle} All systems operational</Text>
+  </Card>
+);
+```
+
+## Placeholder Format
+
+Internally, emoji use the placeholder format `{{emoji:name}}` which gets converted to platform-specific format when posting:
+
+```typescript
+import { convertEmojiPlaceholders } from "chat";
+
+const text = "Thanks! {{emoji:thumbs_up}}";
+
+convertEmojiPlaceholders(text, "slack");
+// "Thanks! :+1:"
+
+convertEmojiPlaceholders(text, "gchat");
+// "Thanks! 👍"
+```
+
+## Matching Emoji
+
+Check if a raw emoji matches a normalized emoji:
+
+```typescript
+import { defaultEmojiResolver } from "chat";
+
+// Match Slack format
+defaultEmojiResolver.matches("+1", emoji.thumbs_up); // true
+defaultEmojiResolver.matches("thumbsup", emoji.thumbs_up); // true
+
+// Match GChat format
+defaultEmojiResolver.matches("👍", emoji.thumbs_up); // true
+```
+
+## Complete Example
+
+Approval workflow with emoji reactions:
+
+```typescript
+import { Chat, emoji, Card, Text, Actions, Button } from "chat";
+
+const chat = new Chat({ /* ... */ });
+
+// Post approval request
+chat.onNewMention(async (thread, message) => {
+  const msg = await thread.post(
+    <Card title={`${emoji.bell} Approval Required`}>
+      <Text>Please review the deployment request</Text>
+      <Actions>
+        <Button id="approve" style="primary">
+          {emoji.check} Approve
+        </Button>
+        <Button id="reject" style="danger">
+          {emoji.x} Reject
+        </Button>
+      </Actions>
+    </Card>
+  );
+  
+  // Add initial reaction
+  await msg.addReaction(emoji.eyes);
+});
+
+// Handle reactions
+chat.onReaction([emoji.thumbs_up, emoji.thumbs_down], async (event) => {
+  if (!event.added) return;
+  
+  if (event.emoji === emoji.thumbs_up) {
+    await event.thread.post(
+      `${emoji.check} Approved by ${event.user.userName}`
+    );
+  } else {
+    await event.thread.post(
+      `${emoji.x} Rejected by ${event.user.userName}`
+    );
+  }
+});
+
+// Handle button clicks
+chat.onAction("approve", async (event) => {
+  await event.thread.post(
+    `${emoji.party} Deployment approved! ${emoji.rocket}`
+  );
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Cards" icon="table-cells" href="/cards">
+    Use emoji in card components
+  </Card>
+  <Card title="Actions" icon="hand-pointer" href="/actions">
+    Add emoji to button labels
+  </Card>
+</CardGroup>

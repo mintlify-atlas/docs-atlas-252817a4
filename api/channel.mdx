@@ -1,0 +1,427 @@
+---
+title: Channel Interface
+description: Represents a channel/conversation container that holds threads
+---
+
+The `Channel` interface represents a channel or conversation container that can hold multiple threads. It provides methods for posting messages, iterating threads and messages, and managing channel-level state.
+
+## Properties
+
+### id
+
+```typescript
+readonly id: string
+```
+
+Unique channel ID. Format: `{adapter}:{channelId}`
+
+**Examples:**
+- Slack: `slack:C123ABC`
+- Teams: `teams:{base64(conversationId)}`
+- Google Chat: `gchat:spaces/ABC123`
+
+### adapter
+
+```typescript
+readonly adapter: Adapter
+```
+
+The adapter this channel belongs to.
+
+### isDM
+
+```typescript
+readonly isDM: boolean
+```
+
+Whether this is a direct message conversation.
+
+### name
+
+```typescript
+readonly name: string | null
+```
+
+Channel name (e.g., "#general"). Null until `fetchMetadata()` is called.
+
+### state
+
+```typescript
+readonly state: Promise<TState | null>
+```
+
+Get the current channel state. Returns null if no state has been set.
+
+```typescript
+interface ChannelState {
+  welcomeMessageSent?: boolean;
+  memberCount?: number;
+}
+
+const state = await channel.state; // Type: ChannelState | null
+```
+
+### messages
+
+```typescript
+readonly messages: AsyncIterable<Message>
+```
+
+Iterate channel-level messages newest first (backward from most recent). Auto-paginates lazily.
+
+<Note>
+This returns top-level channel messages, NOT thread replies. For threaded platforms like Slack, this returns messages posted to the channel directly (not in threads).
+</Note>
+
+```typescript
+// Get the 10 most recent channel messages
+const recent: Message[] = [];
+for await (const msg of channel.messages) {
+  recent.push(msg);
+  if (recent.length >= 10) break;
+}
+```
+
+## Methods
+
+### post()
+
+```typescript
+post(
+  message: string | PostableMessage | CardJSXElement
+): Promise<SentMessage>
+```
+
+Post a message to the channel (top-level, not in a thread).
+
+<ParamField path="message" type="string | PostableMessage | CardJSXElement" required>
+  Message content to post
+
+  <Expandable title="PostableMessage types">
+    - `string` - Raw text
+    - `{ raw: string }` - Explicit raw text
+    - `{ markdown: string }` - Markdown text
+    - `{ ast: Root }` - mdast AST
+    - `{ card: CardElement }` - Rich card
+    - `CardElement` - Direct card element
+    - `AsyncIterable<string>` - Streaming text (accumulated before posting)
+  </Expandable>
+</ParamField>
+
+<ResponseField name="sentMessage" type="SentMessage">
+  A SentMessage with methods to edit, delete, or add reactions
+</ResponseField>
+
+<Note>
+Streaming at the channel level accumulates all chunks before posting as a single message, since channel-level streaming is not typically supported.
+</Note>
+
+```typescript
+// Post to channel
+await channel.post("Hello channel!");
+
+// Post markdown
+await channel.post({ 
+  markdown: "**Important announcement**" 
+});
+
+// Post a card
+await channel.post(
+  <Card title="Daily Standup">
+    <Text>Meeting starts in 5 minutes!</Text>
+  </Card>
+);
+```
+
+### postEphemeral()
+
+```typescript
+postEphemeral(
+  user: string | Author,
+  message: AdapterPostableMessage | CardJSXElement,
+  options: PostEphemeralOptions
+): Promise<EphemeralMessage | null>
+```
+
+Post an ephemeral message visible only to a specific user in this channel.
+
+<ParamField path="user" type="string | Author" required>
+  User ID string or Author object (from message.author or event.user)
+</ParamField>
+
+<ParamField path="message" type="AdapterPostableMessage | CardJSXElement" required>
+  Message content (string, markdown, card, etc.)
+</ParamField>
+
+<ParamField path="options" type="PostEphemeralOptions" required>
+  <Expandable title="properties">
+    <ParamField path="fallbackToDM" type="boolean" required>
+      If true, falls back to DM when native ephemeral is not supported. If false, returns null when unsupported.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="EphemeralMessage | null">
+  EphemeralMessage with `usedFallback: true` if DM was used, or null if unsupported and fallbackToDM is false
+</ResponseField>
+
+```typescript
+// Slash command handler
+chat.onSlashCommand("/secret", async (event) => {
+  await event.channel.postEphemeral(
+    event.user,
+    "This is just for you!",
+    { fallbackToDM: false }
+  );
+});
+```
+
+### setState()
+
+```typescript
+setState(
+  state: Partial<TState>,
+  options?: { replace?: boolean }
+): Promise<void>
+```
+
+Set the channel state. Merges with existing state by default.
+
+<ParamField path="state" type="Partial<TState>" required>
+  State object to set (will be merged with existing state unless replace: true)
+</ParamField>
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="replace" type="boolean" default="false">
+      If true, replace entire state instead of merging
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```typescript
+interface ChannelState {
+  welcomeMessageSent?: boolean;
+  memberCount?: number;
+}
+
+// Merge with existing state
+await channel.setState({ welcomeMessageSent: true });
+
+// Replace entire state
+await channel.setState({ memberCount: 42 }, { replace: true });
+```
+
+### startTyping()
+
+```typescript
+async startTyping(status?: string): Promise<void>
+```
+
+Show typing indicator in the channel.
+
+<ParamField path="status" type="string">
+  Optional status text shown where supported
+</ParamField>
+
+```typescript
+await channel.startTyping("Preparing announcement...");
+```
+
+### fetchMetadata()
+
+```typescript
+async fetchMetadata(): Promise<ChannelInfo>
+```
+
+Fetch channel metadata from the platform (name, member count, etc.).
+
+<ResponseField name="channelInfo" type="ChannelInfo">
+  Channel metadata object
+
+  <Expandable title="ChannelInfo properties">
+    <ResponseField name="id" type="string">
+      Channel ID
+    </ResponseField>
+    <ResponseField name="name" type="string | undefined">
+      Channel name (e.g., "general")
+    </ResponseField>
+    <ResponseField name="isDM" type="boolean | undefined">
+      Whether this is a DM
+    </ResponseField>
+    <ResponseField name="memberCount" type="number | undefined">
+      Number of members in the channel
+    </ResponseField>
+    <ResponseField name="metadata" type="Record<string, unknown>">
+      Platform-specific metadata
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```typescript
+const info = await channel.fetchMetadata();
+console.log(`Channel: ${info.name}, Members: ${info.memberCount}`);
+```
+
+### threads()
+
+```typescript
+threads(): AsyncIterable<ThreadSummary>
+```
+
+Iterate threads in this channel, most recently active first. Returns lightweight `ThreadSummary` objects for efficiency.
+
+<Note>
+Returns an empty iterable on threadless platforms (platforms that don't support threaded conversations).
+</Note>
+
+<ResponseField name="threadSummary" type="AsyncIterable<ThreadSummary>">
+  Async iterable of thread summaries
+
+  <Expandable title="ThreadSummary properties">
+    <ResponseField name="id" type="string">
+      Full thread ID
+    </ResponseField>
+    <ResponseField name="rootMessage" type="Message">
+      Root/first message of the thread
+    </ResponseField>
+    <ResponseField name="replyCount" type="number | undefined">
+      Number of replies (if available)
+    </ResponseField>
+    <ResponseField name="lastReplyAt" type="Date | undefined">
+      Timestamp of most recent reply
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```typescript
+// List all threads in the channel
+for await (const threadSummary of channel.threads()) {
+  console.log(`Thread: ${threadSummary.rootMessage.text}`);
+  console.log(`Replies: ${threadSummary.replyCount}`);
+}
+```
+
+### mentionUser()
+
+```typescript
+mentionUser(userId: string): string
+```
+
+Get a platform-specific mention string for a user.
+
+<ParamField path="userId" type="string" required>
+  Platform-specific user ID
+</ParamField>
+
+<ResponseField name="mention" type="string">
+  Formatted mention string (e.g., `<@U123>`)
+</ResponseField>
+
+```typescript
+const mention = channel.mentionUser(userId);
+await channel.post(`Hey ${mention}, welcome to the channel!`);
+```
+
+## Type Parameters
+
+<ParamField path="TState" type="object" default="Record<string, unknown>">
+  Custom state type stored per-channel
+</ParamField>
+
+<ParamField path="TRawMessage" type="unknown" default="unknown">
+  Platform-specific raw message type
+</ParamField>
+
+## Usage Examples
+
+### Channel Announcements
+
+```typescript
+const channel = chat.channel("slack:C123ABC");
+
+await channel.post({
+  markdown: "**Team Update:** We're launching the new feature today!"
+});
+```
+
+### Welcome New Members
+
+```typescript
+chat.onMemberJoinedChannel(async (event) => {
+  const channel = chat.channel(event.channelId);
+  const state = await channel.state;
+  
+  if (!state?.welcomeMessageSent) {
+    await channel.post("Welcome to the team! 👋");
+    await channel.setState({ welcomeMessageSent: true });
+  }
+});
+```
+
+### List Active Threads
+
+```typescript
+const channel = chat.channel("slack:C123ABC");
+
+// Get the 10 most active threads
+const activeThreads: ThreadSummary[] = [];
+for await (const thread of channel.threads()) {
+  activeThreads.push(thread);
+  if (activeThreads.length >= 10) break;
+}
+
+// Post summary
+const summary = activeThreads
+  .map(t => `- ${t.rootMessage.text.slice(0, 50)}... (${t.replyCount} replies)`)
+  .join("\n");
+
+await channel.post(`**Active Discussions:**\n${summary}`);
+```
+
+### Slash Command Response
+
+```typescript
+chat.onSlashCommand("/announce", async (event) => {
+  // Post public announcement
+  await event.channel.post({
+    markdown: `**Announcement from ${event.user.fullName}:**\n${event.text}`
+  });
+  
+  // Confirm privately to the user
+  await event.channel.postEphemeral(
+    event.user,
+    "Your announcement has been posted!",
+    { fallbackToDM: false }
+  );
+});
+```
+
+### Channel State Management
+
+```typescript
+interface ChannelState {
+  dailyStandupSent?: boolean;
+  lastAnnouncementDate?: string;
+}
+
+// Daily standup reminder
+const channel = chat.channel("slack:C123ABC");
+const state = await channel.state;
+const today = new Date().toISOString().split('T')[0];
+
+if (state?.lastAnnouncementDate !== today) {
+  await channel.post("Time for daily standup! 🎯");
+  await channel.setState({ 
+    dailyStandupSent: true,
+    lastAnnouncementDate: today 
+  });
+}
+```
+
+## See Also
+
+- [Chat API](/api/chat) - Main Chat class
+- [Thread API](/api/thread) - Thread interface
+- [Message API](/api/message) - Message structure
+- [Slash Commands](/core/slash-commands) - Handling slash commands
