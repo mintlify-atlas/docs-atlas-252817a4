@@ -1,0 +1,143 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Chat SDK",
+  "projectDescription": "A unified TypeScript SDK for building chat bots across Slack, Microsoft Teams, Google Chat, Discord, and more.",
+  "theme": "palm",
+  "primaryColor": "#0070F3",
+  "lightColor": "#3291FF",
+  "darkColor": "#0761D1",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "getting-started",
+              "usage"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "threads-messages-channels",
+              "handling-events",
+              "posting-messages",
+              "streaming"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "cards",
+              "actions",
+              "modals",
+              "slash-commands",
+              "emoji",
+              "direct-messages",
+              "ephemeral-messages",
+              "files",
+              "error-handling"
+            ]
+          },
+          {
+            "group": "Adapters",
+            "pages": [
+              "adapters/index",
+              "adapters/slack",
+              "adapters/teams",
+              "adapters/gchat",
+              "adapters/discord",
+              "adapters/telegram",
+              "adapters/github",
+              "adapters/linear"
+            ]
+          },
+          {
+            "group": "State Management",
+            "pages": [
+              "state/index",
+              "state/redis",
+              "state/ioredis",
+              "state/memory"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/slack-nextjs",
+              "guides/discord-nuxt",
+              "guides/code-review-hono"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/index",
+              "api/chat",
+              "api/thread",
+              "api/channel",
+              "api/message"
+            ]
+          },
+          {
+            "group": "Content",
+            "pages": [
+              "api/postable-message",
+              "api/cards",
+              "api/modals",
+              "api/markdown",
+              "api/emoji"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "api/state-adapter",
+              "api/adapter",
+              "api/types"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Unified API across Slack, Teams, Google Chat, Discord, Telegram, GitHub, and Linear",
+    "Event-driven handlers for mentions, messages, reactions, buttons, slash commands, and modals",
+    "Thread subscriptions for multi-turn conversations",
+    "JSX-based cards and modals that render natively on each platform",
+    "AI streaming with native Slack streaming and post+edit fallback",
+    "Type-safe TypeScript SDK with full IntelliSense support",
+    "Serverless-ready with Redis state adapter and message deduplication",
+    "Cross-platform emoji support with type-safe emoji values"
+  ],
+  "publicApiSurface": [
+    "Chat - Main entry point class",
+    "createSlackAdapter() - Slack platform adapter",
+    "createTeamsAdapter() - Microsoft Teams adapter",
+    "createGChatAdapter() - Google Chat adapter",
+    "createDiscordAdapter() - Discord adapter",
+    "createTelegramAdapter() - Telegram adapter",
+    "createGitHubAdapter() - GitHub adapter",
+    "createLinearAdapter() - Linear adapter",
+    "createRedisState() - Redis state adapter",
+    "createIORedisState() - ioredis state adapter",
+    "createMemoryState() - In-memory state adapter",
+    "Thread - Represents a conversation thread",
+    "Channel - Represents a channel/conversation container",
+    "Message - Normalized message object",
+    "Card, Button, Section, Field - JSX card components",
+    "Modal, TextInput, Select - JSX modal components",
+    "emoji - Cross-platform emoji utilities",
+    "parseMarkdown() - Markdown to AST parser",
+    "stringifyMarkdown() - AST to markdown converter"
+  ]
+}
